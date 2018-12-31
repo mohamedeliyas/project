@@ -193,3 +193,198 @@ namespace Biyaheko.Logic
 
    
 }
+
+
+
+
+
+
+
+
+using Biyaheko.Logic;
+using Biyaheko.Models;
+using Biyaheko.Models;
+using System;
+using System.Data.SqlClient;
+using System.Net;
+using System.Net.Http;
+using System.Web.Http;
+using ARMBtErrorLogger;
+using Newtonsoft.Json;
+using System.Configuration;
+using System.Globalization;
+
+namespace Biyaheko.Controllers
+{
+    public class DomesticController : ApiController
+    {
+        #region Decleration
+        Common lobjCommon = new Common();
+        DBConnect lobjDataTier = new DBConnect();
+        ARMErrorLogger lobjErrorLog = new ARMErrorLogger();
+        clsJsonObject<string> lobjJsonResult;
+        #endregion
+
+        public HttpResponseMessage Search(DomSearchReq lobjSearchInput)
+        {
+            System.Net.Http.Headers.HttpRequestHeaders headers = this.Request.Headers;
+            string[] lstrMauth;
+            AgentInfo lobjAgentInfo = new AgentInfo();
+            lobjJsonResult = new clsJsonObject<string>();
+            if (headers.Contains("mauth_token"))
+            {
+                lstrMauth = (string[])headers.GetValues("mauth_token");
+                string[] M_Token = lobjCommon.Decrypt(lstrMauth[0]).Split('$');               
+                lobjAgentInfo.TRAVELAGENTID = M_Token[0];
+                lobjAgentInfo.TERMINALID = M_Token[1];
+                lobjAgentInfo.OPERATORID = M_Token[2];
+                lobjAgentInfo.HANDSHAKEID = M_Token[3];
+            }
+            else {
+
+                lobjJsonResult = lobjCommon.StringToJson<string>(2, "User Session has exipred..!!", null);
+                return Request.CreateResponse(HttpStatusCode.OK, lobjJsonResult);
+            }
+            
+            
+            try
+            {
+                SearchRequest lobjSearchReq = new SearchRequest();
+                Availabilityrequestinput lobjAirlineMod = new Availabilityrequestinput();
+                SearchReasponse lobjSearchRespon = new SearchReasponse();
+                int JounaryListCount = 1;
+                if (lobjSearchInput.TripType == "R")
+                {
+                    JounaryListCount = 2;
+                }
+                Journeydetail[] JounaryList = new Journeydetail[JounaryListCount];
+
+                JounaryList[0] = new Journeydetail();
+                JounaryList[0].Origin = lobjSearchInput.From;
+                JounaryList[0].Destination = lobjSearchInput.To;
+                JounaryList[0].TravelDate = lobjSearchInput.Onward.ToString("MM/dd/yyyy", CultureInfo.InvariantCulture);
+                if (lobjSearchInput.TripType == "R")
+                {
+                    JounaryList[1] = new Journeydetail();
+                    JounaryList[1].Origin = lobjSearchInput.To;
+                    JounaryList[1].Destination = lobjSearchInput.From;
+                    JounaryList[1].TravelDate = lobjSearchInput.Return.ToString("MM/dd/yyyy", CultureInfo.InvariantCulture);
+                }
+
+                string[] lobjDT = DateTime.Now.GetDateTimeFormats();
+                string lstrUserTrack = lobjDT[41].Replace("/", "").Replace(" ", "").Replace(":", "").Replace("-", "");
+                
+                lobjAirlineMod.TerminalID = lobjAgentInfo.TERMINALID;
+                lobjAirlineMod.TravelAgentID = lobjAgentInfo.TRAVELAGENTID;
+                lobjAirlineMod.OperatorID = Convert.ToInt16(lobjAgentInfo.OPERATORID);
+                lobjAirlineMod.TrackID = lobjAgentInfo.TRAVELAGENTID + lstrUserTrack;
+                lobjAirlineMod.BookingType = lobjSearchInput.TripType;
+                lobjAirlineMod.ClassType = lobjSearchInput.ClassType.ToString();
+                lobjAirlineMod.SpecificAirlines = "10,9,620,6,";
+                lobjAirlineMod.AdultCount = lobjSearchInput.AdultCount;
+                lobjAirlineMod.ChildCount = lobjSearchInput.ChildCount;
+                lobjAirlineMod.InfantCount = lobjSearchInput.InfantCount;
+                lobjAirlineMod.ResidentofCountry = 0;
+                lobjAirlineMod.DirectAccess = 0;
+                lobjAirlineMod.SeniorCitizenFlag = (lobjSearchInput.SeniorCitizenFlag) ? "1" : "0";
+                lobjAirlineMod.DirectFlag = 0;
+                lobjAirlineMod.PreferCurrecy = "PHP";
+                lobjAirlineMod.Optional1 = "";
+
+                lobjAirlineMod.JourneyDetails = JounaryList;
+                lobjSearchReq.APPMethod = "SEARCHNEW1";
+                lobjSearchReq.AvailabilityRequestInput = lobjAirlineMod;
+                string lobjInput = JsonConvert.SerializeObject(lobjSearchReq);
+                var lstrAPIUrl = ConfigurationManager.AppSettings["AirlineAPI"].ToString() + "Search";
+                lobjCommon.ConnectAirlineAPI<SearchReasponse>(lstrAPIUrl, lobjInput, ref lobjSearchRespon);
+
+                if (lobjSearchRespon.ResponseStatus == 1)
+                {
+                    if (lobjSearchRespon.AvailabilityOutput.OutBoundFlights.AvailableFlights != null)
+                    {
+                        if (lobjSearchInput.TripType == "O")
+                        {
+                            clsJsonObject<SearchReasponse> lobjFligthResp = new clsJsonObject<SearchReasponse>();
+                            lobjSearchRespon.TheardNo = lobjSearchInput.TheardNo;
+                            lobjFligthResp = lobjCommon.StringToJson<SearchReasponse>(1, "Success", lobjSearchRespon);
+                            return Request.CreateResponse(HttpStatusCode.OK, lobjFligthResp);
+                        }
+                        else if (lobjSearchInput.TripType == "R")
+                        {
+                            if (lobjSearchRespon.AvailabilityOutput.InBoundFlights.AvailableFlights != null)
+                            {
+                                clsJsonObject<SearchReasponse> lobjFligthResp = new clsJsonObject<SearchReasponse>();
+                                lobjFligthResp = lobjCommon.StringToJson<SearchReasponse>(1, "Success", lobjSearchRespon);
+                                return Request.CreateResponse(HttpStatusCode.OK, lobjFligthResp);
+                            }
+                            else
+                            {
+                                lobjJsonResult = lobjCommon.StringToJson<string>(0, "Return Fligths not Available", null);
+                            }
+                        }
+                    }
+                    else
+                    {
+                        lobjJsonResult = lobjCommon.StringToJson<string>(0, "No Fligths Available", null);
+                    }
+                }
+                else
+                {
+                    lobjJsonResult = lobjCommon.StringToJson<string>(0, "No Fligth Available", null);
+                }
+
+            }
+            catch (Exception ex)
+            {
+                lobjErrorLog.Err_Handler(ex, "LoginController", "Login");
+                lobjJsonResult = lobjCommon.StringToJson<string>(0, "Unable To Process Your Request !", null);
+            }
+            return Request.CreateResponse(HttpStatusCode.OK, lobjJsonResult);
+        }
+
+        public HttpResponseMessage FareRule(FareRuleReq lobjFareRuleInputReq)
+        {
+            try
+            {
+                FareRuleRequest lobjFareRuleReq = new FareRuleRequest();
+                FareRuleResponse lobjFareResponse = new FareRuleResponse();
+                Fareruleinputrequest lobjFareRuleInput = new Fareruleinputrequest();
+                lobjFareRuleReq.APPMethod = "FARERULCRS";
+                lobjFareRuleInput.TrackID = lobjFareRuleInputReq.UserTrackId;
+                lobjFareRuleInput.TerminalID = "INMAA022000000";
+                lobjFareRuleInput.TravelAgentID = "INMAA0220000";
+                lobjFareRuleInput.OperatorID = 50;
+                lobjFareRuleInput.AirlineID = lobjFareRuleInputReq.AirlineID;
+                lobjFareRuleInput.FlightID = lobjFareRuleInputReq.FlightID;
+                lobjFareRuleInput.ClassCode = lobjFareRuleInputReq.ClassCode;
+                lobjFareRuleInput.CrsID = lobjFareRuleInputReq.CrsID;
+                lobjFareRuleInput.FareBasis = lobjFareRuleInputReq.FareBasis;
+                lobjFareRuleInput.BrowserFlag = lobjFareRuleInputReq.BrowserFlag;
+                lobjFareRuleInput.CarrierCode = lobjFareRuleInputReq.CarrierCode;
+                lobjFareRuleInput.SegmentKeyRef = lobjFareRuleInputReq.SegmentKeyRef;
+                lobjFareRuleInput.TravelType = lobjFareRuleInputReq.TravelType;
+                lobjFareRuleInput.PreferedCurrency = "PHP";
+                lobjFareRuleReq.FareRuleInputRequest = lobjFareRuleInput;
+                string lobjInput = JsonConvert.SerializeObject(lobjFareRuleReq);
+                var lstrAPIUrl = ConfigurationManager.AppSettings["AirlineAPI"].ToString() + "FareRule";
+                lobjCommon.ConnectAirlineAPI<FareRuleResponse>(lstrAPIUrl, lobjInput, ref lobjFareResponse);
+                if (lobjFareResponse.ResponseStatus == 1)
+                {
+                    lobjJsonResult = lobjCommon.StringToJson<string>(1, "Sucess", lobjFareResponse.FareRuleOutPut);
+                }
+                else
+                {
+                    lobjJsonResult = lobjCommon.StringToJson<string>(0, "No Fare Rule Avaliable...!", null);
+                }
+            }
+            catch (Exception ex) {
+                lobjErrorLog.Err_Handler(ex, "LoginController", "FareRule");
+                lobjJsonResult = lobjCommon.StringToJson<string>(0, "Unable To Process Your Request !", null);
+            }
+            return Request.CreateResponse(HttpStatusCode.OK, lobjJsonResult);
+
+        }
+    }
+}
+
+
