@@ -1,0 +1,514 @@
+using System;
+using System.Collections.Generic;
+using System.Data;
+using System.Linq;
+using System.Web;
+using System.Web.Mvc;
+using Newtonsoft.Json;
+using HermesLogger;
+using ARMBtErrorLogger;
+using System.Data.SqlClient;
+using BIYAHEKOMVCWEB.Logic;
+
+
+namespace BIYAHEKOMVCWEB
+{
+    public class AuthenticationController : Controller
+    {
+        #region "Declaration"
+        string lstrErrorCode = string.Empty;
+        string lstrErrorMsg = string.Empty;
+        string JSONresult = string.Empty;
+        LoginMaster Lobjlogin = new LoginMaster();
+        Common LobjCommon = new Common();
+        DataAccess ldataAccess = new DataAccess();
+        HermesLogger.clsConnector lobjErrorLog = new clsConnector();
+        ARMErrorLogger lobjARMError = new ARMErrorLogger();
+        ARMDataTier.clsDataconnector lobjDataTier = new ARMDataTier.clsDataconnector(ARMDataTier.clsDataconnector.DATABASE.HERMES);
+        EnDeCrypt.clsEnDeCryption lobjEncrypt = new EnDeCrypt.clsEnDeCryption();
+        #endregion
+
+
+        #region "Action Method"
+
+        public ActionResult Index()
+        {
+           
+            return View();
+        }
+
+        #endregion
+
+        #region "Service Method"
+
+        [HttpPost]
+        public JsonResult Login(Login logininput)
+        {
+            try
+            {
+
+
+                string lstrInput = string.Empty;
+                DataSet LdsOutput = new DataSet();
+         
+            //string strin = bkwhitelabel(Request.Url.ToString());
+
+
+                if (!Lobjlogin.Login(logininput, ref LdsOutput, ref lstrErrorMsg, ref lstrErrorCode))
+                {
+                    string lstrErrloginstr = JsonConvert.SerializeObject(logininput);
+                    lobjErrorLog.APPLOG_WRITER(HermesLogger.clsConnector.APPLOG_ProjectType.APP_OTHERES, "Authentication-Newlayout", "Login", clsConnector.APPLOG_MessageType.REQUEST, lstrErrloginstr, "");
+                    JSONresult = LobjCommon.SetStatus("0", lstrErrorMsg, "[]");
+                    lobjErrorLog.APPLOG_WRITER(HermesLogger.clsConnector.APPLOG_ProjectType.APP_OTHERES, "Authentication-Newlayout", "Login", clsConnector.APPLOG_MessageType.RESPONSE, lstrErrorMsg, "");
+                    return Json(JSONresult, JsonRequestBehavior.AllowGet);
+                }
+
+                LoginInfo logininfo = new LoginInfo();
+                string loginstr = JsonConvert.SerializeObject(LdsOutput);
+
+                LdsOutput = new DataSet();
+                lstrErrorCode = string.Empty;
+                lstrErrorMsg = string.Empty;
+                Lobjlogin.BannerImg(ref LdsOutput, ref lstrErrorMsg, ref lstrErrorCode);
+                List<BannerInfo> lBannerInfos = new List<BannerInfo>();
+                BannerInfo lobjBannerInfo;
+                foreach (DataRow tblData in LdsOutput.Tables[0].Rows)
+                {
+                    if (tblData["IMGURL"] != "" && tblData["IMGURL"] != null && tblData["IMGURL"] != "null")
+                    {
+                        lobjBannerInfo = new BannerInfo();
+                        lobjBannerInfo.BannerDescription = tblData["IMGDESC1"].ToString();
+                        lobjBannerInfo.BannerURL = tblData["IMGURL"].ToString();
+                        lBannerInfos.Add(lobjBannerInfo);
+                    }
+                }
+                List<MenuList> lstMenu = new List<MenuList>();
+                string lstrJsonMenu = System.IO.File.ReadAllText(Server.MapPath("~/Content/Sources/Json/Menu.json")).Replace("\r\n\t", "");
+
+                lstMenu = JsonConvert.DeserializeObject<List<MenuList>>(lstrJsonMenu);
+                logininfo = JsonConvert.DeserializeObject<LoginInfo>(loginstr);
+                logininfo.BannerInfos = lBannerInfos;
+                logininfo.Menulists = new List<MenuList>();
+                string[] strMenu = logininfo.Table1[0].PRODUCTDETAILS.ToString().Split('*');
+                //if (strMenu.Contains("99"))
+                //{
+                //    logininfo.Menulists = lstMenu;
+                //}
+                //else
+                //{
+                logininfo.Menulists = lstMenu.Where(row => strMenu.Contains(row.ID.ToString())).ToList();
+                //}
+                Session["logininfo"] = logininfo;
+                loginstr = JsonConvert.SerializeObject(logininfo);
+                JSONresult = LobjCommon.SetStatus("1", "SUCCESS", loginstr);
+            }
+            catch (Exception ex)
+            {
+                lobjARMError.Err_Handler(ex, "AuthenticationController", "Login");
+                JSONresult = LobjCommon.SetStatus("0", "Unable To Process Your Request !.", "[]");
+            }
+            return Json(JSONresult, JsonRequestBehavior.AllowGet);
+        }
+ 
+ 
+
+        [HttpPost]
+        public JsonResult Logout()
+        {
+            try
+            {
+                Session.Abandon();
+                Session.Clear();
+                Session.RemoveAll();
+                JSONresult = LobjCommon.SetStatus("1", "Success", "[]");
+                return Json(JSONresult, JsonRequestBehavior.AllowGet);
+            }
+            catch (Exception ex)
+            {
+                JSONresult = LobjCommon.SetStatus("0", "Unable to process", "[]");
+                lobjARMError.Err_Handler(ex, "AuthenticationController", "Logout");
+                return Json(JSONresult, JsonRequestBehavior.AllowGet);
+            }
+        }
+
+        [HttpPost]
+        public JsonResult ForgotPwd(ForgotPassword ForgotPwd)
+        {
+            string lstrErrMsg = "";
+            try
+            {
+                bool lForgotVaild = ldataAccess.GetForgotPwdValidation(ForgotPwd.TERMINALID, ForgotPwd.RegMobileNo, ForgotPwd.RegEmailID, ForgotPwd.UserID, ref lstrErrMsg);
+                string lstrErrInpstr = JsonConvert.SerializeObject(ForgotPwd);
+                lobjErrorLog.APPLOG_WRITER(HermesLogger.clsConnector.APPLOG_ProjectType.APP_OTHERES, "Authentication-Newlayout", "ForgotPwd", clsConnector.APPLOG_MessageType.REQUEST, lstrErrInpstr, "");
+                if (lForgotVaild)
+                {
+                    JSONresult = LobjCommon.SetStatus("1", "Your password has been delivered to your E-mail.", "[]");
+                }
+                else
+                {
+                    JSONresult = LobjCommon.SetStatus("0", lstrErrMsg, "[]");
+                    lobjErrorLog.APPLOG_WRITER(HermesLogger.clsConnector.APPLOG_ProjectType.APP_OTHERES, "Authentication-Newlayout", "ForgotPwd", clsConnector.APPLOG_MessageType.RESPONSE, lstrErrMsg, "");
+                }
+            }
+            catch (Exception ex)
+            {
+                JSONresult = LobjCommon.SetStatus("0", "Unable to process your request. Please try later", "[]");
+                lobjARMError.Err_Handler(ex, "AuthenticationController", "ForgotPwd");
+            }
+            return Json(JSONresult, JsonRequestBehavior.AllowGet);
+        }
+
+        [HttpPost]
+        public JsonResult CheckAliasNameAvailable(string AliasName)
+        {
+            try
+            {
+                LoginInfo lobjloginInfo = (LoginInfo)Session["logininfo"];
+                string lstrError = string.Empty;
+                string lstrOutput = string.Empty;
+                ControlPanelMaster lobjCtrlPanelMstr = new ControlPanelMaster();
+                if (lobjCtrlPanelMstr.CheckAliasNameAvail(AliasName, ref lstrOutput, ref lstrError))
+                {
+                    JSONresult = LobjCommon.SetStatus("1", "Available", "[]");
+                }
+                else
+                {
+                    JSONresult = LobjCommon.SetStatus("0", lstrError, "[]");
+                }
+
+                return Json(JSONresult, JsonRequestBehavior.AllowGet);
+            }
+            catch (Exception ex)
+            {
+                //  lobjErrorLog.ERROR_HANDLER(clsConnector.ERR_ApplicationType.ERR_OTHERS, HermesLogger.clsConnector.APPLOG_ProjectType.APP_OTHERES, "AIRLINE", "Domestic", "PreSearch", e);
+                JSONresult = LobjCommon.SetStatus("0", ex.Message.ToString(), "[]");
+                lobjARMError.Err_Handler(ex, "Authentication", "CheckAliasNameAvailable");
+                return Json(JSONresult, JsonRequestBehavior.AllowGet);
+            }
+        }
+
+        [HttpPost]
+        public JsonResult createAlias(string AliasName, string TerminalID, string userID, string PstrPassword)
+        {
+            try
+            {
+                string lstrErrorCode = "";
+                string lstrErrDesc = "";
+                string lstrPassward = "";
+                DataSet lobjDataset = new DataSet();
+                EnDeCrypt.clsEnDeCryption decrypt = new EnDeCrypt.clsEnDeCryption();
+                SqlParameter[] lobjParameters = new SqlParameter[5];
+
+                lobjEncrypt.Encrypt(PstrPassword, ref lstrPassward, ref lstrErrorCode);
+
+                lobjParameters[0] = new SqlParameter();
+                lobjParameters[0].ParameterName = "@Terminalid";
+                lobjParameters[0].DbType = DbType.String;
+                lobjParameters[0].Direction = ParameterDirection.Input;
+                lobjParameters[0].Value = TerminalID;
+
+                lobjParameters[1] = new SqlParameter();
+                lobjParameters[1].ParameterName = "@Terminalalais";
+                lobjParameters[1].DbType = DbType.String;
+                lobjParameters[1].Direction = ParameterDirection.Input;
+                lobjParameters[1].Value = AliasName;
+
+                lobjParameters[2] = new SqlParameter();
+                lobjParameters[2].ParameterName = "@OperatorUserID";
+                lobjParameters[2].DbType = DbType.String;
+                lobjParameters[2].Direction = ParameterDirection.Input;
+                lobjParameters[2].Value = userID;
+
+                lobjParameters[3] = new SqlParameter();
+                lobjParameters[3].ParameterName = "@OperatorPassword";
+                lobjParameters[3].DbType = DbType.String;
+                lobjParameters[3].Direction = ParameterDirection.Input;
+                lobjParameters[3].Value = lstrPassward;
+
+                string errmsg = "";
+
+                lobjDataTier.FillDataset("ADM_INS_TERMNALALIAS", ref lobjDataset, lobjParameters, ref lstrErrorCode, ref lstrErrDesc);
+                if (lstrErrDesc == "")
+                {
+                    if (lobjDataset.Tables.Count > 0)
+                    {
+                        if (lobjDataset.Tables[0].Rows.Count > 0)
+                        {
+                            if (lobjDataset.Tables[0].Rows[0][0].ToString() == "1")
+                            {
+                                JSONresult = LobjCommon.SetStatus("1", "Alias Name Created Successfully", "[]");
+                                //ScriptManager.RegisterStartupScript(this, this.GetType(), "ALERT2", "ShowMSG('The password has been delivered to your E-mail.');", true);
+                            }
+                            else
+                            {
+                                JSONresult = LobjCommon.SetStatus("0", lobjDataset.Tables[1].Rows[0][0].ToString(), "[]");
+
+                            }
+                        }
+                        else
+                        {
+                            JSONresult = LobjCommon.SetStatus("0", "Please Try again Later", "[]");
+                        }
+                    }
+                }
+                else
+                {
+                    JSONresult = LobjCommon.SetStatus("0", lstrErrDesc, "[]");
+                }
+
+            }
+            catch (Exception ex)
+            {
+                //  lobjErrorLog.ERROR_HANDLER(clsConnector.ERR_ApplicationType.ERR_OTHERS, HermesLogger.clsConnector.APPLOG_ProjectType.APP_OTHERES, "AIRLINE", "Domestic", "PreSearch", e);
+                JSONresult = LobjCommon.SetStatus("0", ex.Message.ToString(), "[]");
+                lobjARMError.Err_Handler(ex, "createAlias", "CheckAliasNameAvailable");
+                return Json(JSONresult, JsonRequestBehavior.AllowGet);
+            }
+            return Json(JSONresult, JsonRequestBehavior.AllowGet);
+        }
+
+        [HttpPost]
+        public JsonResult City(int CityId)
+        {
+            try
+            {
+                DataSet LobjDataSet = new DataSet();
+                string lstrError = string.Empty;
+                if (!GetCity(CityId, ref LobjDataSet, ref lstrError))
+                {
+                    JSONresult = LobjCommon.SetStatus("0", lstrError, "[]");
+                }
+                else
+                {
+                    JSONresult = LobjCommon.SetStatus("1", "", JsonConvert.SerializeObject(LobjDataSet.Tables[0]));
+                }
+            }
+            catch (Exception ex)
+            {
+                //   lobjErrorLog.ERROR_HANDLER(clsConnector.ERR_ApplicationType.ERR_OTHERS, HermesLogger.clsConnector.APPLOG_ProjectType.APP_OTHERES, "Authentication", "AuthenticationCtrl", "City", ex);
+                lobjARMError.Err_Handler(ex, "AuthenticationController", "City");
+                JSONresult = LobjCommon.SetStatus("0", "Unable To Process Your Request", "[]");
+            }
+            return Json(JSONresult);
+        }
+
+        [HttpPost]
+        public JsonResult Register(Register register)
+        {
+            try
+            {
+                JSONresult = string.Empty;
+                string lstrError = string.Empty, lstrReturn = string.Empty;
+                if (!Register(register, ref lstrReturn, ref lstrError))
+                {
+                    JSONresult = LobjCommon.SetStatus("0", lstrError, "[]");
+                }
+                else
+                {
+                    JSONresult = LobjCommon.SetStatus("1", lstrReturn, "[]");
+                }
+            }
+            catch (Exception ex)
+            {
+                JSONresult = LobjCommon.SetStatus("0", "Unable To Process Your Request.Please Try After Sometime !", "[]");
+                lobjARMError.Err_Handler(ex, "AuthenticationController", "Register");
+            }
+            return Json(JSONresult, JsonRequestBehavior.AllowGet);
+        }
+
+        #endregion
+
+        #region "Private Method"
+
+        public bool GetCity(int CityID, ref DataSet LobjDataSet, ref string lstrError)
+        {
+            try
+            {
+                ARMDataTier.clsDataconnector lobjData = new ARMDataTier.clsDataconnector(ARMDataTier.clsDataconnector.DATABASE.HERMES);
+
+                SqlParameter[] lobjParam = new SqlParameter[1];
+                lobjParam[0] = new SqlParameter();
+                lobjParam[0].ParameterName = "@CityId";
+                lobjParam[0].DbType = DbType.Int32;
+                lobjParam[0].Value = CityID;
+
+                lobjData.FillDataset("RPT_Cbo_City", ref LobjDataSet, lobjParam, ref lstrErrorCode, ref lstrError);
+
+                if (string.IsNullOrEmpty(lstrError))
+                {
+                    if (LobjDataSet.Tables.Count > 0)
+                    {
+                        if (LobjDataSet.Tables[0].Rows.Count > 0)
+                        {
+                            return true;
+                        }
+                        else
+                        {
+                            lstrError = "No Data Available !!";
+                            return false;
+                        }
+                    }
+                    else
+                    {
+                        lstrError = "No Data Available !";
+                        return false;
+                    }
+                }
+                else
+                {
+                    return false;
+                }
+            }
+            catch (Exception ex)
+            {
+                lobjARMError.Err_Handler(ex, "AuthenticationController", "GetCity Bool");
+            }
+            return false;
+        }
+
+        public bool Register(Register register, ref string lstrReturn, ref string lstrError)
+        {
+            try
+            {
+                ARMDataTier.clsDataconnector lobjData = new ARMDataTier.clsDataconnector(ARMDataTier.clsDataconnector.DATABASE.HERMES);
+                DataSet lobjDataset = new DataSet();
+                lstrErrorCode = string.Empty;
+                lstrError = string.Empty;
+                SqlParameter[] lobjParam = new SqlParameter[13];
+
+                lobjParam[0] = new SqlParameter();
+                lobjParam[0].ParameterName = "@AgencyName";
+                lobjParam[0].DbType = DbType.String;
+                lobjParam[0].Value = register.AgencyName;
+
+                lobjParam[1] = new SqlParameter();
+                lobjParam[1].ParameterName = "@Name";
+                lobjParam[1].DbType = DbType.String;
+                lobjParam[1].Value = register.ContactPerson;
+
+                lobjParam[2] = new SqlParameter();
+                lobjParam[2].ParameterName = "@product";
+                lobjParam[2].DbType = DbType.String;
+                lobjParam[2].Value = "BIYAHEKO";
+
+                lobjParam[3] = new SqlParameter();
+                lobjParam[3].ParameterName = "@Emailid";
+                lobjParam[3].DbType = DbType.String;
+                lobjParam[3].Value = register.Email;
+
+                lobjParam[4] = new SqlParameter();
+                lobjParam[4].ParameterName = "@mobileNo";
+                lobjParam[4].DbType = DbType.String;
+                lobjParam[4].Value = register.Mobile;
+
+                lobjParam[5] = new SqlParameter();
+                lobjParam[5].ParameterName = "@TelephoneNo";
+                lobjParam[5].DbType = DbType.String;
+                lobjParam[5].Value = register.ContactNo;
+
+                lobjParam[6] = new SqlParameter();
+                lobjParam[6].ParameterName = "@Address";
+                lobjParam[6].DbType = DbType.String;
+                lobjParam[6].Value = register.Address2;
+
+                lobjParam[7] = new SqlParameter();
+                lobjParam[7].ParameterName = "@City";
+                lobjParam[7].DbType = DbType.String;
+                lobjParam[7].Value = register.City;
+
+                lobjParam[8] = new SqlParameter();
+                lobjParam[8].ParameterName = "@State";
+                lobjParam[8].DbType = DbType.String;
+                lobjParam[8].Value = register.Country;
+
+                lobjParam[9] = new SqlParameter();
+                lobjParam[9].ParameterName = "@Pincode";
+                lobjParam[9].DbType = DbType.String;
+                lobjParam[9].Value = register.Zipcode;
+
+                lobjParam[10] = new SqlParameter();
+                lobjParam[10].ParameterName = "@Others1";
+                lobjParam[10].DbType = DbType.String;
+                lobjParam[10].Value = "";
+
+                lobjParam[11] = new SqlParameter();
+                lobjParam[11].ParameterName = "@Others2";
+                lobjParam[11].DbType = DbType.String;
+                lobjParam[11].Value = register.Address1;
+
+                lobjParam[12] = new SqlParameter();
+                lobjParam[12].ParameterName = "@Query";
+                lobjParam[12].DbType = DbType.String;
+                lobjParam[12].Value = register.Remarks;
+
+                lobjData.FillDataset("tra_website", ref lobjDataset, lobjParam, ref lstrErrorCode, ref lstrError);
+                if (lstrError == string.Empty && lstrErrorCode == string.Empty)
+                {
+                    if (lobjDataset.Tables.Count > 0)
+                    {
+                        if (lobjDataset.Tables[0].Rows.Count > 0)
+                        {
+                            if (lobjDataset.Tables[0].Rows[0][0].ToString() == "1")
+                            {
+                                lstrReturn = "Your request has been updated successfully! Our customer support executive will contact you shortly!";
+                                return true;
+                            }
+                            else
+                            {
+
+                                lstrError = "Unable to update your Details. ERROR!.";
+                                return false;
+                            }
+                        }
+                        else
+                        {
+                            lstrError = "Unable to update your Details. No Rows Available!.";
+                            return false;
+                        }
+                    }
+                    else
+                    {
+                        lstrError = "Unable to update your Details. No Table Available!.";
+                        return false;
+                    }
+                }
+                else
+                {
+                    return false;
+                }
+            }
+            catch (Exception ex)
+            {
+                lstrError = "Unable To Process Your Request ! Please Try After Sometime";
+                lobjARMError.Err_Handler(ex, "AuthenticationController", "Register Bool");
+            }
+            return false;
+        }
+
+
+        public string bkwhitelabel(string url)
+        {
+            string lstrdomainname = url.Split('/')[2];
+            if (url.Contains("202.54.157.7") || url.ToLower().Contains("localhost") || url.ToLower().Contains("192.168.30.179"))
+                lstrdomainname = url.Split('/')[3];
+            else
+                lstrdomainname = url.Split('/')[2].Split('.')[1];
+             DataSet lobjds = new DataSet();           
+            string lstrPath  = "";
+            lobjds.ReadXml(System.AppDomain.CurrentDomain.BaseDirectory + "Content/Sources/xml/BKWhiteLabel.xml");
+            //lobjds.ReadXml(lstrPath & "\BKWhiteLabel.xml")
+            DataTable LobjDT = new DataTable();
+            
+            lobjds.Tables[0].DefaultView.RowFilter = " domainname='" + lstrdomainname.ToLower() + "'";
+            LobjDT = lobjds.Tables[0].DefaultView.ToTable();
+            if(LobjDT.Rows.Count > 0 )
+             return "1|" + LobjDT.Rows[0][0] + "$" + LobjDT.Rows[0][1] + "$" + LobjDT.Rows[0][2] + "$" + LobjDT.Rows[0][3] + "$" + LobjDT.Rows[0][4] + "$";
+            else
+                return "0|";
+
+        }
+ 
+
+        #endregion
+    }
+}
