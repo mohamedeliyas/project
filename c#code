@@ -512,3 +512,2960 @@ namespace BIYAHEKOMVCWEB
         #endregion
     }
 }
+
+
+
+
+
+
+
+
+
+using ARMBtErrorLogger;
+using BIYAHEKOMVCWEB.Logic;
+using BIYAHEKOMVCWEB.Models;
+using EnDeCrypt;
+using HermesLogger;
+using Newtonsoft.Json;
+using System;
+using System.Collections.Generic;
+using System.Configuration;
+using System.Data;
+using System.Data.SqlClient;
+using System.Globalization;
+using System.IO;
+using System.Linq;
+using System.Net.Sockets;
+using System.Security.Cryptography;
+using System.Text;
+using System.Web;
+using System.Web.Mail;
+using System.Xml.Linq;
+using System.Xml.Serialization;
+namespace BIYAHEKOMVCWEB
+{
+    public class Common
+    {
+        #region "Declaration"
+
+        ARMDataTier.clsDataconnector lobjDataTier = new ARMDataTier.clsDataconnector(ARMDataTier.clsDataconnector.DATABASE.HERMES);
+        ARMDataTier.clsDataconnector lobjFareDataTier = new ARMDataTier.clsDataconnector(ARMDataTier.clsDataconnector.DATABASE.BUS);
+        DataLogger.clsDataErrorLog lobjerror = new DataLogger.clsDataErrorLog();
+        DataAccess lobjDataAccs = new DataAccess();
+        clsEnDeCryption lobjEnDecyrpt = new clsEnDeCryption();
+        string lstrErrorCode = string.Empty;
+        string lstrErrorMsg = string.Empty;
+        HermesLogger.clsConnector lobjErrorLog = new clsConnector();
+        ARMErrorLogger lobjArmErrorLog = new ARMErrorLogger();
+        #endregion
+
+        #region "Public Method"
+        string lstrInput = string.Empty;
+        string lstrErrMsg = string.Empty;
+        public string SetStatus(string PstrStatusCode, string PstrStatusDese, string PstrData)
+        {
+            return "[{\"Status\":\"" + PstrStatusCode + "\" , \"StatusDesc\" :\"" + PstrStatusDese + "\" , \"Data\":" + PstrData + "}]";
+        }
+
+        public string GenerateUserTrackID(string lobjTerrminal)
+        {
+            try
+            {
+                return "BH" + lobjTerrminal.ToUpper() + (DateTime.Now).ToString("ddMMyyyyHHmmss", CultureInfo.InvariantCulture) + "NEW";
+            }
+            catch (Exception ex)
+            {
+                lobjArmErrorLog.Err_Handler(ex, "Common", "GenerateUserTrackID");
+                return lobjTerrminal;
+            }
+        }
+
+        public bool TCPSocket(string IpAddress, string PortNo, string lstrInputMsg, ref string PstrOutPut, ref string PstrErrorMsg)
+        {
+            TcpClient tcpclient = default(TcpClient);
+            NetworkStream stream = default(NetworkStream);
+            byte[] data = null;
+            try
+            {
+                tcpclient = new TcpClient(IpAddress, Convert.ToInt32(PortNo));
+                data = System.Text.Encoding.ASCII.GetBytes(lstrInputMsg);
+                stream = tcpclient.GetStream();
+                stream.WriteTimeout = (Convert.ToInt32(ConfigurationManager.AppSettings["TCPTimeOut"].ToString()) * 1000);
+                stream.ReadTimeout = (Convert.ToInt32(ConfigurationManager.AppSettings["TCPTimeOut"].ToString()) * 1000); ;
+                stream.Write(data, 0, data.Length);
+                System.IO.StreamReader ss = new System.IO.StreamReader(stream);
+                PstrOutPut = ss.ReadToEnd();
+                ss.Close();
+                stream.Close();
+                tcpclient.Close();
+                if (string.IsNullOrEmpty(PstrOutPut))
+                {
+                    PstrErrorMsg = "There was problem connection to the server...";
+                    return false;
+                }
+                else
+                {
+                    return true;
+                }
+            }
+            catch (Exception ex)
+            {
+                PstrErrorMsg = "Exception on TCP Connection : " + ex.Message;
+                lobjArmErrorLog.Err_Handler(ex, "Common", "TCPSocket");
+                return false;
+            }
+            finally
+            {
+                stream = null;
+                tcpclient = null;
+            }
+
+        }
+
+
+        public bool SendMail(string LstrInput, string lstrMail)
+        {
+            try
+            {
+                if (HttpContext.Current.Session["logininfo"] == null)
+                {
+                    return false;
+                }
+                string lstrInput = string.Empty;
+                LoginInfo terminal = ((LoginInfo)HttpContext.Current.Session["logininfo"]);
+
+                /*Genrate Air History DB String*/
+                lstrInput += terminal.Table1[0].TRAVELAGENTID + "$";
+                lstrInput += terminal.Table1[0].TERMINALID + "$";
+                lstrInput += terminal.Table1[0].OPERATORID + "$";
+                lstrInput += terminal.Table1[0].HANDSHAKEID + "$";
+                lstrInput += LstrInput + "$2$$0$0$1$";
+                DataSet ldsRslt = new DataSet();
+                string lstrError = "";
+                lobjErrorLog.APPLOG_WRITER(HermesLogger.clsConnector.APPLOG_ProjectType.APP_OTHERES, "AirHistory", "SendMail", clsConnector.APPLOG_MessageType.REQUEST, lstrInput, "");
+                Boolean lBoolResult = lobjDataAccs.GetReprintData(lstrInput, ref ldsRslt, ref lstrError);
+                if (lBoolResult)
+                {
+                    string lstrMailData = ldsRslt.Tables[2].Rows[0][0].ToString() + "?" + terminal.Table1[0].TERMINALID + "?" + ldsRslt.Tables[2].Rows[0][1].ToString() + "?" + ldsRslt.Tables[2].Rows[0][2].ToString();
+                    string lstrMailFormate = displayticketnew(lstrMailData, false, false, 1);
+                    string lstrSubject = "Air Ticket [ " + LstrInput + " ]";
+                    lstrError = "";
+                    Emailsender(lstrMail, "", "", lstrSubject, lstrMailFormate, ref lstrError);
+                    if (lstrError == "")
+                    {
+                        return true;
+                    }
+                    else
+                    {
+                        lobjErrorLog.APPLOG_WRITER(HermesLogger.clsConnector.APPLOG_ProjectType.APP_OTHERES, "AirHistory", "SendMail -> Emailsender - FAILURE", clsConnector.APPLOG_MessageType.RESPONSE, lstrError, "");
+                        return false;
+                    }
+
+                }
+                else
+                {
+                    lobjErrorLog.APPLOG_WRITER(HermesLogger.clsConnector.APPLOG_ProjectType.APP_OTHERES, "AirHistory", "SendMail - FAILURE", clsConnector.APPLOG_MessageType.RESPONSE, lstrError, "");
+
+                    return false;
+                }
+            }
+            catch (Exception ex)
+            {
+                //  lobjErrorLog.ERROR_HANDLER(clsConnector.ERR_ApplicationType.ERR_OTHERS, HermesLogger.clsConnector.APPLOG_ProjectType.APP_OTHERES, "AIRLINE", "AirHistory", "SendMail", Ex);
+                lobjArmErrorLog.Err_Handler(ex, "Common", "SendMail");
+                return false;
+
+            }
+
+        }
+
+
+        public string displayticketnew(string pstrInput, string lstrTerminalID, bool pbhidfar, int bAppflag)
+        {
+
+            int i;
+            int j;
+            int lintcnt;
+            try
+            {
+                string displaystr;
+                StreamReader lobjSR;
+                StringBuilder lobjSB = new StringBuilder();
+                double dblRescheduleCharge;
+                double dblReschedulePenalty;
+                double dblTotServiceTax;
+                double dblSportsCharge;
+                string[] larrpax;
+                //Session("AgentLoginDetails") = srini1$CEE43B516FB122F0$INMAA022000000$INMAA0220000$50$sJhd]cgEuLjT2bT]xPw191$TESTING*GUINDY**Central Luzon *41*600032*66706057*9042113862*arivazhagan@hermes-it.in*Abra$0*1*2*3*4*5*6*7*8*9*11*99*$39416666.14$~$MRMYC$0~1~$2$0$1$1$123000000000$1
+
+
+
+                for (lintcnt = 0; lintcnt <= pstrInput.Split('#').GetUpperBound(0) - 1; lintcnt++)
+                {
+                    string[] lstr = new string[] { };
+                    string[] lstr1;
+                    string lstrPAXType = "";
+                    string lstrtemp;
+                    string lstrtempsub;
+                    string lstrpaymentmode;
+                    lobjSR = new StreamReader(System.AppDomain.CurrentDomain.BaseDirectory + ConfigurationManager.AppSettings["ticketpath"] + "AirlineTicket.htm");
+                    lobjSB.Append(lobjSR.ReadToEnd());
+                    lobjSR.Close();
+                    string lstrDomainUrl = string.Empty;
+                    if (getTravelAgentLogo(lstrTerminalID) != "")
+                    {
+                        string[] lstrUrl = HttpContext.Current.Request.Url.ToString().Split('/');
+
+                        if (lstrUrl[2].ToLower().Contains("biyaheko"))
+                        {
+                            lstrDomainUrl = "http://biyaheko.com/";
+                        }
+                        else
+                        {
+                            lstrDomainUrl = "http://" + lstrUrl[2] + "/" + lstrUrl[3] + "/";
+                        }
+                        lstrtemp = "<img src='" + lstrDomainUrl + getTravelAgentLogo(lstrTerminalID) + "' alt='logo'>";
+                    }
+                    else
+                    {
+                        lstrtemp = "";
+                    }
+                    lobjSB.Replace("^hlogo^", lstrtemp);
+
+                    lstrtemp = "";
+                    //<img alt='' src='" & ConfigurationManager.AppSettings("logoimgpath").ToString() & "Tsslogo.png' width='130 height=40'>"
+                    //Biyahe Ko
+                    if (bAppflag == 2)
+                    {
+                        // lstrtemp = "<img alt='ticketlogo' src='" & ConfigurationManager.AppSettings("DomainURL").ToString() & "style/biyaheko/images/ticket-logo.gif' width='76' height='14'>"
+                        //TSS
+                    }
+                    else if (bAppflag == 3)
+                    {
+                        //  lstrtemp = "<img alt='ticketlogo' src='" & ConfigurationManager.AppSettings("DomainURL").ToString() & "style/tss/images/ticket-logo.gif' width='76' height='14'>"
+                    }
+
+                    lobjSB.Replace("^logo^", lstrtemp);
+                    //'lstrtemp = "<img src='" & ConfigurationManager.AppSettings("DomainURL").ToString() & "images/ticket-logo.gif' width='76' height='14'>"
+                    //'lobjSB.Replace("^logo^", lstrtemp)
+
+                    dblRescheduleCharge = 0;
+                    dblReschedulePenalty = 0;
+                    dblTotServiceTax = 0;
+                    dblSportsCharge = 0;
+
+                    double ldbasicfare = 0;
+                    double ldtax = 0;
+                    double ldeqamt = 0;
+                    double ldtransfee = 0;
+                    double ldblservicetax = 0;
+                    double ldblservicetaxnew = 0;
+
+                    string ldtrtemp;
+                    string lstrtax = "";
+                    string lstrcrcode = "";
+                    string lstridproof = "";
+                    string lCanContent = "";
+                    string lstraddress = "";
+                    string lstrCRSPNRNo = "";
+                    bool isMealBaggageNeed = false;
+                    string[] pstrbill = pstrInput.Split('#')[lintcnt].Split('~');
+
+                    if (pstrbill[19].Split('*').Length > 1)
+                    {
+                        lstraddress += "<b><span class='hermes'>" + pstrbill[19].Split('*')[0] + "</span><b><br>";
+                        //If pstrbill(19).Split("*")(1) <> "" Then
+                        //    lstraddress += pstrbill(19).Split("*")(1) & "<br>"
+                        //End If
+                        //If pstrbill(19).Split("*")(2) <> "" Then
+                        //    lstraddress += pstrbill(19).Split("*")(2) & "<br>"
+                        //End If
+                        //If pstrbill(19).Split("*")(3) <> "" Then
+                        //    lstraddress += pstrbill(19).Split("*")(3) & "<br>"
+                        //End If
+                        //If pstrbill(19).Split("*")(4) <> "" Then
+                        //    lstraddress += pstrbill(19).Split("*")(4) & "<br>"
+                        //End If
+
+                        if (pstrbill[19].Split('*')[5] != "")
+                        {
+                            lstraddress += "<b><span class='hermes'>" + pstrbill[19].Split('*')[5] + "</span><b><br>";
+                        }
+                        if (pstrbill[19].Split('*')[6] != "")
+                        {
+                            lstraddress += "<b><span class='hermes'>" + pstrbill[19].Split('*')[6] + "</span><b><br>";
+                        }
+                        if (pstrbill[19].Split('*')[7] != "")
+                        {
+                            lstraddress += "<b><span class='hermes'>" + pstrbill[19].Split('*')[7] + "</span><b><br>";
+                        }
+
+                    }
+                    lobjSB.Replace("^AgencyAddress^", lstraddress);
+                    lobjSB.Replace("^hermesid^", pstrbill[1]);
+
+
+                    lstrtempsub = pstrbill[1].ToString();
+                    lstrtemp = "";
+                    //lstrtemp = "<img src='" & ConfigurationManager.AppSettings("airimgwebpath").ToString() & "!asterisk.gif' width='14' height='22'>"
+                    //For i = 0 To lstrtempsub.Length - 1
+                    //    lstrtemp += ("<img src='" & ConfigurationManager.AppSettings("airimgwebpath").ToString()) + lstrtempsub(i) & ".gif " & "' width='14' height='22'>"
+                    //Next
+                    //lstrtemp += "<img src='" & ConfigurationManager.AppSettings("airimgwebpath").ToString() & "!asterisk.gif' width='14' height='22'>"
+                    lobjSB.Replace("^hermespnr^", lstrtemp);
+
+                    lobjSB.Replace("^issued^", BKDateFormat(pstrbill[14].Split(' ')[0], "dd-MMM-yyyy", false));
+                    string[] larrAirlineDetails;
+                    larrAirlineDetails = pstrbill[4].Split('!');
+                    lstrtemp = "";
+
+                    for (int lintAirline = 0; lintAirline <= larrAirlineDetails.Length - 2; lintAirline++)
+                    {
+
+                        lstrtemp += "<tr><td valign='top'  class='hermes'><b>ISSUED BY:</b> <span class='hermes'>";
+
+                        if (System.IO.File.Exists(System.AppDomain.CurrentDomain.BaseDirectory + "/images/logos/" + "A" + Convert.ToString(larrAirlineDetails[lintAirline].Split('*')[0]) + ".gif"))
+                        {
+                            lstrtemp += "<img alt='A" + Convert.ToString(larrAirlineDetails[lintAirline].Split('*')[0]) + "' src='" + ConfigurationManager.AppSettings["DomainURL"] + "images/logos/" + "A" + Convert.ToString(larrAirlineDetails[lintAirline].Split('*')[0]) + ".gif'/>";
+                        }
+                        else
+                        {
+                            lstrtemp += "<img alt='A" + Convert.ToString(larrAirlineDetails[lintAirline].Split('*')[0]) + "' src='" + ConfigurationManager.AppSettings["DomainURL"] + "images/logos/" + "A" + Convert.ToString(larrAirlineDetails[lintAirline].Split('*')[0]) + ".bmp'/>";
+                        }
+
+                        lstr = larrAirlineDetails[lintAirline].Split('*');
+                        lstrtempsub = lstr[1];
+
+                        lstrtemp += "<br /></span></td><td><table align='center'><tr><td valign='middle' nowrap='nowrap' class='hermes'>" + "<b>AIRLINE PNR: </b></td><td align='left'  style='font-size:large;' valign='middle' nowrap='nowrap' class='hermes'><b>" + " " + lstrtempsub + "</b></td></tr></table></td>";
+
+
+                        //lobjSB.Replace("^AirlineLogo^", lstrtemp)
+                        //lobjSB.Replace("^Airid^", lstrtempsub)
+
+                        //'lstrtemp &= "<img src='" & ConfigurationManager.AppSettings("airimgwebpath").ToString() & "!asterisk.gif' width='14' height='22'>"
+                        //'For i = 0 To lstrtempsub.Length - 1
+                        //'    lstrtemp &= ("<img src='" & ConfigurationManager.AppSettings("airimgwebpath").ToString()) + lstrtempsub(i) & ".gif " & "' width='14' height='22'>"
+                        //'Next
+                        //'lstrtemp &= "<img src='" & ConfigurationManager.AppSettings("airimgwebpath").ToString() & "!asterisk.gif' width='14' height='22'>"
+
+                        lstrtemp += "<td class='hermes' align='left'>";
+                        lstrtemp += lstr[2] + "," + lstr[3] + "," + lstr[4] + "," + "<br/>" + lstr[5] + "<br/>" + lstr[6] + "<br/>" + (lstr[7] != "" ? "Phone:" + lstr[7] + ", <br/>" : "") + (lstr[8] != "" ? "Fax:" + lstr[8] + ", <br/>" : "") + (lstr[9].Replace("!", "") != "" ? "EMail:" + lstr[9].Replace("!", "") : "");
+                        lstrtemp += "</td></tr>";
+                    }
+                    lobjSB.Replace("^airlinedetails^", lstrtemp);
+                    //lobjSB.Replace("^airlienpnr^", lstrtemp)
+
+                    //lstrtemp = lstr(2) + "," + lstr(3) + "," + lstr(4) + "," + "<br/>" + lstr(5) + "<br/>" + lstr(6) + "<br/>" & _
+                    //   IIf(lstr(7) <> "", "Phone:" + lstr(7) + ", <br/>", "") & _
+                    //    IIf(lstr(8) <> "", "Fax:" + lstr(8) + ", <br/>", "") & _
+                    //    IIf(lstr(9).Replace("!", "") <> "", "EMail:" + lstr(9).Replace("!", ""), "")
+                    //lobjSB.Replace("^airlineaddress^", lstrtemp)
+
+                    lstrtemp = "";
+                    string[] larrpass;
+                    double ldblGrossAmount = 0;
+                    double lblGrossbasicAmnt = 0;
+                    double lblInsuranceAmt = 0;
+
+                    double ldblTotalTax = 0;
+                    double ldblTotalEquivalentFare = 0;
+
+                    string lstrPAX = "";
+                    string lstrItinerary = "";
+                    string lstrSPRequest = "";
+
+                    string[] larrAllPNRs;
+                    string[] larrOnePnr;
+                    string[] larrPerPax;
+                    string[] larrPerSegment;
+                    string[] larrTaxDesc;
+                    larrAllPNRs = pstrbill[20].Split('^');
+                    string lstrTaxS = "";
+
+                    for (i = 0; i <= larrAllPNRs.Length - 2; i++)
+                    {
+                        larrOnePnr = larrAllPNRs[i].Split('`');
+                        larrPerPax = larrOnePnr[4].Split('@');
+                        //lstr1 = larrAllPNRs(i).Split("@")
+
+                        ldtax = 0;
+                        ldtransfee = 0;
+                        ldblservicetax = 0;
+                        ldbasicfare = 0;
+                        ldblGrossAmount = 0;
+                        ldtax = 0;
+                        ldeqamt = 0;
+
+                        //Itinerary
+                        if (i == 0)
+                            lstrItinerary += ("<tr><td colspan='2'><table  width=100% class='txt' style='font-weight: bold;' cellpadding=0 cellspacing=0><tr class=Hermes bgcolor=#CCCCCC><th>ORIGIN</th><th>DESTINATION</th><th>FLIGHT NO</th><th>CLASS</th><th>DEP.DATE & TIME</th><th>ARR.DATE & TIME</th><th>FARE BASIS</th></tr>");
+
+                        //Meals & Baggage
+                        if (i == 0)
+                            lstrSPRequest += ("<tr><td align='left' style='padding-top: 5px;padding-bottom: 5px;'><span class='hermesH'>SPECIAL REQUEST</span></td></tr><tr><td colspan='2'><table  width=100% class='txt' style='font-weight: bold;' cellpadding=0 cellspacing=0><tr bgcolor='#CCCCCC'><th>ORIGIN</th><th>DESTINATION</th><th>TICKET NO</th><th>SPECIAL REQUEST</th><th>FREQUENT FLYER NO</th><th>MEALS</th><th>SEAT PREFERENCE</th><th>NOT VALID BEFORE</th><th>NOT VALID AFTER</th><th>ALLOW</th></tr>");
+
+                        for (j = 0; j <= larrPerPax.Length - 2; j++)
+                        {
+                            larrPerSegment = larrPerPax[j].Split('*');
+                            ldbasicfare += Convert.ToDouble(larrPerSegment[26]);
+                            ldeqamt += Convert.ToDouble(larrPerSegment[27]);
+                            ldtransfee += Convert.ToDouble(larrPerSegment[30]);
+                            ldblservicetax += Convert.ToDouble(larrPerSegment[32]);
+                            dblTotServiceTax += Convert.ToDouble(larrPerSegment[32]);
+
+                            larrTaxDesc = larrPerSegment[28].Split('!');
+                            for (int lintTaxCount = 0; lintTaxCount <= larrTaxDesc.GetUpperBound(0); lintTaxCount++)
+                            {
+                                if (larrTaxDesc[lintTaxCount].Trim() != "")
+                                {
+                                    if (!(larrTaxDesc[lintTaxCount].Split('%')[1] == "Reschedule Charges" || larrTaxDesc[lintTaxCount].Split('%')[1] == "Reschedule Penalty" || larrTaxDesc[lintTaxCount].Split('%')[1] == "Sports Charges"))
+                                    {
+                                        ldtax += Convert.ToDouble(larrTaxDesc[lintTaxCount].Split('%')[2]);
+                                        string lstrTaxDes = "";
+                                        lstrTaxDes = larrTaxDesc[lintTaxCount].Split('%')[1].Trim().ToUpper();
+                                        if (lstrTaxDes.Contains("TOTAL TAX") | lstrTaxDes.Contains("TOTALTAX"))
+                                        {
+                                            lstrTaxDes = "TOTAL TAX";
+                                        }
+                                        lstrTaxS += lstrTaxDes + "-" + larrTaxDesc[lintTaxCount].Split('%')[2] + ",";
+                                    }
+                                    else
+                                    {
+                                        if (larrTaxDesc[lintTaxCount].Split('%')[1] == "Reschedule Charges")
+                                        {
+                                            dblRescheduleCharge += Convert.ToDouble(larrTaxDesc[lintTaxCount].Split('%')[2]);
+                                        }
+                                        if (larrTaxDesc[lintTaxCount].Split('%')[1] == "Reschedule Penalty")
+                                        {
+                                            dblReschedulePenalty += Convert.ToDouble(larrTaxDesc[lintTaxCount].Split('%')[2]);
+                                        }
+                                        if (larrTaxDesc[lintTaxCount].Split('%')[1] == "Sports Charges")
+                                        {
+                                            dblSportsCharge += Convert.ToDouble(larrTaxDesc[lintTaxCount].Split('%')[2]);
+                                        }
+                                    }
+                                }
+                            }
+                            lstrTaxS += "!";
+                            //Itinerary Details
+                            //If i = 0 Then lstrItinerary += ("<tr><td>" + getAirport(larrPerSegment(3), pstrbill(13)) + "</td><td>" + getAirport(larrPerSegment(6), pstrbill(13)) + "</td><td>" + CStr(larrPerSegment(1)) + "</td><td>" + larrPerSegment(12) + "</td><td>" + larrPerSegment(5) + "</td><td>" + larrPerSegment(8) + "</td><td>" + IIf(larrPerSegment(14) <> "", larrPerSegment(14), "-") + "</td></tr>")
+                            //IIf(larrPerSegment(4).Trim <> "", " ( " & larrPerSegment(4) & " ) ", "") & _ To Enable Terminal Details (Terminal No) -> orgin
+                            //IIf(larrPerSegment(7).Trim <> "", " ( " & larrPerSegment(7) & " ) ", "") & "</td><td>" & _ To Enable Terminal Details (Terminal No) -> Destination
+                            if (i == 0)
+                            {
+                                if (larrPerSegment[4] != null && larrPerSegment[4] != "")
+                                {
+                                    lstrItinerary += "<tr><td>" + getAirport(larrPerSegment[3], pstrbill[13]) + larrPerSegment[4] + "</td>";
+                                }
+                                else
+                                {
+                                    lstrItinerary += "<tr><td>" + getAirport(larrPerSegment[3], pstrbill[13]) + lobjDataAccs.getTerminal(larrPerSegment[3].ToLower(), larrPerSegment[6].ToLower(), lstr[2], 0) + "</td>";
+
+                                }
+                                if (larrPerSegment[7] != null && larrPerSegment[7] != "")
+                                {
+                                    lstrItinerary += "<td>"+ getAirport(larrPerSegment[6], pstrbill[13])+ larrPerSegment[7] + "</td>";
+                                }
+                                else
+                                {
+                                    lstrItinerary += "<td>" + getAirport(larrPerSegment[6], pstrbill[13]) + lobjDataAccs.getTerminal(larrPerSegment[3].ToLower(), larrPerSegment[6].ToLower(), lstr[2], 1) + "</td>";
+
+                                }
+
+                                lstrItinerary += "<td>" + Convert.ToString(larrPerSegment[1]) + "</td><td>" + larrPerSegment[12] + "</td><td>" + BKDateFormat(larrPerSegment[5].Split(' ')[0], "dd-MMM-yyyy", true) + " " + larrPerSegment[5].Split(' ')[1] + "</td><td>" + BKDateFormat(larrPerSegment[8].Split(' ')[0], "dd-MMM-yyyy", true) + " " + larrPerSegment[8].Split(' ')[1] + "</td><td>" + (larrPerSegment[14] != "" ? larrPerSegment[14] : "-") + "</td></tr>";
+                            }
+                            //Meals & Baggage Details                         
+                            //larrPerSegment(17)-Baggage
+                            //larrPerSegment(21)-Spl Request
+                            //larrPerSegment(22)-Meals
+                            //larrPerSegment(23)-Seat Preferrence
+                            if ((larrPerSegment[17].Trim() != "" | larrPerSegment[21].Trim() != "" | larrPerSegment[22].Trim() != "" | larrPerSegment[23].Trim() != "" | larrOnePnr[0] != larrPerSegment[0]))
+                            {
+                                lstrSPRequest += "<tr><td>" + getAirport(larrPerSegment[3], pstrbill[13]) + "</td><td>" + getAirport(larrPerSegment[6], pstrbill[13]) + "</td><td>" + larrPerSegment[0] + "</td><td align='center'>" + (larrPerSegment[21].Trim() == "" ? "-" : larrPerSegment[21]) + "</td><td align='center'>-</td><td>" + (larrPerSegment[22].Trim() == "" ? "-" : larrPerSegment[22]) + "</td><td align='center'>" + (larrPerSegment[23].Trim() == "" ? "-" : larrPerSegment[23]) + "</td><td align='center'>-</td><td align='center'>-</td><td>" + (larrPerSegment[17].Trim() == "" ? "-" : larrPerSegment[17]) + "</td></tr>";
+                                isMealBaggageNeed = true;
+                            }
+                        }
+
+                        ldtax += ldtransfee;
+                        lblGrossbasicAmnt += ldbasicfare;
+                        ldblTotalEquivalentFare += ldeqamt;
+                        ldblTotalTax += ldtax;
+
+                        double lintpax = Convert.ToDouble(pstrbill[9]) + Convert.ToDouble(pstrbill[10]) + Convert.ToDouble(pstrbill[11]);
+                        double ldlbExtra = Convert.ToDouble(pstrbill[21]) / lintpax;
+                        string lstrIDProofNo = "";
+                        ldtax += ldlbExtra;
+                        ldblGrossAmount += ldeqamt + ldtax;
+                        larrpass = larrOnePnr[2].Split('*');
+                        if (Convert.ToDouble(larrpass[4]) > Convert.ToDouble(ConfigurationManager.AppSettings["SeniorCitizen"].ToString()) | larrpass[4] != "")
+                        {
+                            //If larrpass(6) <> "" Then
+                            lstrIDProofNo = larrpass[6];
+                        }
+                        //Pax Details
+                        if (i == 0)
+                        {
+                            if (lstrIDProofNo == "")
+                            {
+                                if (pbhidfar)
+                                {
+                                    lstrPAX += ("<tr><td   height=24 colspan='2' style='padding-top:10px;'><table  width='100%' class='txt' cellpadding=0 cellspacing=0><tr class=Hermes bgcolor=#CCCCCC><th>PASSENGER NAME</th><th>TICKET NO</th><th>PAX TYPE</th><th>STATUS</th></tr>");
+                                }
+                                else
+                                {
+                                    lstrPAX += ("<tr><td   height=24 colspan='2' style='padding-top:10px;'><table  width='100%' class='txt' cellpadding=0 cellspacing=0><tr class=Hermes bgcolor=#CCCCCC><th>PASSENGER NAME</th><th>TICKET NO</th><th>BASIC FARE</th><th>TAX & OTHERS</th><th>GROSS AMOUNT</th><th>PAX TYPE</th><th>STATUS</th></tr>");
+                                }
+                            }
+                            else
+                            {
+                                if (pbhidfar)
+                                {
+                                    lstrPAX += ("<tr><td   height=24 colspan='2' style='padding-top:10px;'><table  width='80%' class='txt' cellpadding=0 cellspacing=0><tr class=Hermes bgcolor=#CCCCCC><th>PASSENGER NAME</th><th>TICKET NO</th><th>PAX TYPE</th><th>ID PROOF</th><th>STATUS</th></tr>");
+                                }
+                                else
+                                {
+                                    lstrPAX += ("<tr><td   height=24 colspan='2' style='padding-top:10px;'><table  width='80%' class='txt' cellpadding=0 cellspacing=0><tr class=Hermes bgcolor=#CCCCCC><th>PASSENGER NAME</th><th>TICKET NO</th><th>BASIC FARE</th><th>TAX & OTHERS</th><th>GROSS AMOUNT</th><th>PAX TYPE</th><th>ID PROOF</th><th>STATUS</th></tr>");
+                                }
+                            }
+                        }
+
+
+                        switch (Convert.ToInt32(larrpass[0]))
+                        {
+                            case 1:
+                                lstrPAXType = "Adult";
+                                break;
+                            case 2:
+                                lstrPAXType = "Child";
+                                break;
+                            case 3:
+                                lstrPAXType = "Infant";
+                                break;
+                            default:
+                                break; // TODO: might not be correct. Was : Exit Select
+
+
+                        }
+                        if (lstrIDProofNo == "")
+                        {
+                            if (pbhidfar == true)
+                            {
+                                lstrPAX += ("<tr><td style='font-weight: bold;'>" + larrpass[1] + " " + larrpass[2] + " " + larrpass[3] + "</td><td>" + larrOnePnr[0] + "</td><td>" + lstrPAXType + "</td><td>" + (larrpass[12].ToUpper() == "LIVE" ? "CONFIRM" : larrpass[12].ToUpper()) + "</td></tr>");
+                                //</table><td></tr><tr><td height='5px'></td></tr>")
+                            }
+                            else
+                            {
+                                lstrPAX += ("<tr><td style='font-weight: bold;'>" + larrpass[1] + " " + larrpass[2] + " " + larrpass[3] + "</td><td>" + larrOnePnr[0] + "</td><td>" + string.Format("{0:F2}", ldbasicfare) + "</td><td>" + string.Format("{0:F2}", ldtax + ldblservicetax) + "</td><td>" + string.Format("{0:F2}", Convert.ToDouble(ldblGrossAmount + ldblservicetax)) + "</td><td>" + lstrPAXType + "</td><td>" + (larrpass[12].ToUpper() == "LIVE" ? "CONFIRM" : larrpass[12].ToUpper()) + "</td></tr>");
+                                //</table><td></tr><tr><td height='5px'></td></tr>")
+                            }
+                        }
+                        else
+                        {
+                            if (pbhidfar == true)
+                            {
+                                lstrPAX += ("<tr><td style='font-weight: bold;'>" + larrpass[1] + " " + larrpass[2] + " " + larrpass[3] + "</td><td>" + larrOnePnr[0] + "</td><td>" + lstrPAXType + "</td><td>" + lstrIDProofNo + "</td><td>" + (larrpass[12].ToUpper() == "LIVE" ? "CONFIRM" : larrpass[12].ToUpper()) + "</td></tr>");
+                                //</table><td></tr><tr><td height='5px'></td></tr>")
+                            }
+                            else
+                            {
+                                lstrPAX += ("<tr><td style='font-weight: bold;'>" + larrpass[1] + " " + larrpass[2] + " " + larrpass[3] + "</td><td>" + larrOnePnr[0] + "</td><td>" + string.Format("{0:F2}", ldbasicfare) + "</td><td>" + string.Format("{0:F2}", ldtax + ldblservicetax) + "</td><td>" + string.Format("{0:F2}", Convert.ToDouble(ldblGrossAmount + ldblservicetax)) + "</td><td>" + lstrPAXType + "</td><td>" + lstrIDProofNo + "</td><td>" + (larrpass[12].ToUpper() == "LIVE" ? "CONFIRM" : larrpass[12].ToUpper()) + "</td></tr>");
+                                //</table><td></tr><tr><td height='5px'></td></tr>")
+                            }
+                        }
+                    }
+                    string[] arrTaxSplit = lstrTaxS.Split('!');
+                    int lintTaxSplit;
+                    string lstrTaxSplit = "";
+                    string[] arrTaxS = arrTaxSplit[0].Split(',');
+                    try
+                    {
+                        for (int linTS = 0; linTS <= arrTaxS.Length - 2; linTS++)
+                        {
+                            decimal ldecTaxTot = 0;
+                            string lstrTaxDesc = "";
+                            lstrTaxDesc = arrTaxS[linTS].Split('-')[0].Trim();
+                            for (lintTaxSplit = 0; lintTaxSplit <= arrTaxSplit.Length - 2; lintTaxSplit++)
+                            {
+                                if (linTS <= arrTaxSplit[lintTaxSplit].Split(',').Length - 2)
+                                {
+                                    if (arrTaxSplit[lintTaxSplit].Split(',')[linTS].Split('-')[0].Trim() == lstrTaxDesc)
+                                    {
+                                        ldecTaxTot += Convert.ToDecimal(arrTaxSplit[lintTaxSplit].Split(',')[linTS].Split('-')[1]);
+                                    }
+                                    else
+                                    {
+                                        string[] arrSubTax = arrTaxSplit[lintTaxSplit].Split(',');
+                                        for (int lintsubtax = 0; lintsubtax <= arrSubTax.Length - 2; lintsubtax++)
+                                        {
+                                            if (arrSubTax[lintsubtax].Split('-')[0].Trim() == lstrTaxDesc)
+                                            {
+                                                ldecTaxTot += Convert.ToDecimal(arrSubTax[lintsubtax].Split('-')[1]);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            if (ldecTaxTot != 0)
+                            {
+                                if (!lstrTaxDesc.Contains("MTCHARGES"))
+                                {
+                                    lstrTaxSplit += lstrTaxDesc + " - " + Convert.ToString(ldecTaxTot) + " , ";
+                                }
+                            }
+                        }
+                        if (lstrTaxSplit != "")
+                        {
+                            lstrTaxSplit = "<b>Taxes & Others : </b>" + lstrTaxSplit.Substring(0, lstrTaxSplit.Length - 3);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                    }
+
+                    lstrItinerary += ("</table></td></tr>");
+                    lstrSPRequest += ("</table></td></tr>");
+                    lstrPAX += ("</table></td></tr>");
+
+                    lstrtemp = "";
+                    //System.AppDomain.CurrentDomain.BaseDirectory() & "\images\logos\logo_" & pstrbill(0).Substring(2, 12) & ".gif"
+
+                    if (getTravelAgentLogo(lstrTerminalID) != "")
+                    {
+                        //lstrtemp = "<img src='" & ConfigurationManager.AppSettings("DomainURL").ToString() & getTravelAgentLogo(lstrTerminalID) & "' alt='logo'>"
+                    }
+                    //If File.Exists(System.AppDomain.CurrentDomain.BaseDirectory() & "\images\logos\logo_" & pstrbill(0).Substring(2, 12) & ".gif") Then
+                    //    lstrtemp = "<img src='" & ConfigurationManager.AppSettings("DomainURL").ToString() & "images/logos/logo_" & pstrbill(0).Substring(2, 12) & ".gif' alt='logo'>"
+                    //End If
+
+                    lobjSB.Replace("^agentlogo^", lstrtemp);
+
+                    lobjSB.Replace("^passdetails^", lstrPAX);
+                    lobjSB.Replace("^itinerary^", lstrItinerary);
+                    if (pbhidfar == true)
+                    {
+                        lobjSB.Replace("^hidefaredetails^", "display:none;");
+                    }
+                    else
+                    {
+                        lobjSB.Replace("^hidefaredetails^", "display:block;");
+                    }
+
+                    if (isMealBaggageNeed)
+                    {
+                        lobjSB.Replace("^sprequest^", lstrSPRequest);
+                    }
+                    else
+                    {
+                        lobjSB.Replace("^sprequest^", "");
+                    }
+
+
+                    ldblTotalTax += Convert.ToDouble(pstrbill[21]);
+
+                    if (pstrbill[18].Split('*')[0] == "8")
+                    {
+                        lstrpaymentmode = "Payment Gateway";
+                    }
+                    else if (pstrbill[18].Split('*')[0] == "7")
+                    {
+                        lstrpaymentmode = "Agent";
+                    }
+                    else
+                    {
+                        lstrpaymentmode = "Agent Topup Deposit";
+                    }
+                    //For CRS PNR
+                    lstrtemp = "";
+                    lstrtemp = pstrbill[6].Split('%')[0];
+                    if (lstrtemp.Trim() != "")
+                    {
+                        lstrtemp = "<table bordercolor='#000000' border='0' cellpadding='0' class='txt' cellspacing='0'><tr>" + "<th>CRS PNR</th></tr>" + "<tr><td>" + lstrtemp + "</td></tr></table>";
+                    }
+                    if ((pstrInput.Split('?')[3] != ""))
+                    {
+                        lblInsuranceAmt = Convert.ToDouble(pstrInput.Split('?')[3]);
+                        lstrTaxSplit = lstrTaxSplit + ", AIG Insurance Fee - " + string.Format("{0:F2}", lblInsuranceAmt);
+                    }
+                    else
+                    {
+                        lobjSB.Replace("^Insurancehide^", "hide");
+                    }
+                    lobjSB.Replace("^crspnr^", (lstrtemp.Trim() != "" ? lstrtemp : "-"));
+                    lobjSB.Replace("^modeofpayment^", (lstrpaymentmode != "" ? lstrpaymentmode : "-"));
+                    lobjSB.Replace("^basefare^", string.Format("{0:F2}", lblGrossbasicAmnt));
+                    lobjSB.Replace("^equivalentfare^", string.Format("{0:F2}", ldblTotalEquivalentFare));
+                    lobjSB.Replace("^tax^", string.Format("{0:F2}", ldblTotalTax));
+                    //lobjSB.Replace("^tax^", String.Format("{0:F2}", ldblTotalTax - ldblservicetaxnew))
+                    lobjSB.Replace("^servicetax^", string.Format("{0:F2}", ldblservicetax));
+                    lobjSB.Replace("^grossfare^", string.Format("{0:F2}", ldblTotalTax + lblGrossbasicAmnt + dblRescheduleCharge + dblReschedulePenalty + ldblservicetax + lblInsuranceAmt));
+                    lobjSB.Replace("^gatewaycharges^", (pstrbill[25].Trim() != "" ? pstrbill[25] : "-"));
+                    lobjSB.Replace("^cancelpenalty^", (pstrbill[26].Trim() != "" ? pstrbill[26] : "-"));
+                    lobjSB.Replace("^faredetails^", "-");
+                    lobjSB.Replace("^issueexchange^", "-");
+                    lobjSB.Replace("^tourcode^", "-");
+                    lobjSB.Replace("^reschedulecharges^", dblRescheduleCharge.ToString());
+                    lobjSB.Replace("^reschedulepenalty^", dblReschedulePenalty.ToString());
+                    lobjSB.Replace("^Insurance^", string.Format("{0:F2}", lblInsuranceAmt));
+
+                    //additionalcharges
+                    lstrtemp = "";
+                    if (dblRescheduleCharge > 0)
+                        lstrtemp = "<tr><td align='left' bgcolor='#cccccc'><b>Reschedule Charges(PHP)</b></td><td align='right'>" + string.Format("{0:F2}", dblRescheduleCharge) + "</td></tr>";
+                    if (dblReschedulePenalty > 0)
+                        lstrtemp = lstrtemp + "<tr><td align='left' bgcolor='#cccccc'><b>Reschedule Penalty(PHP)</b></td><td align='right'>" + string.Format("{0:F2}", dblReschedulePenalty) + "</td></tr>";
+                    if (Convert.ToDecimal(pstrbill[26].Trim()) > 0)
+                        lstrtemp = lstrtemp + "<tr><td align='left' bgcolor='#cccccc'><b>Cancellation Penalty(PHP)</b></td><td align='right'>" + (pstrbill[26].Trim() != "" ? string.Format("{0:F2}", pstrbill[26]) : "-") + "</td></tr>";
+                    if (dblSportsCharge > 0)
+                        lstrtemp = lstrtemp + "<tr><td align='left' bgcolor='#cccccc'><b>Sports Charges(PHP)</b></td><td align='right'>" + string.Format("{0:F2}", dblSportsCharge) + "</td></tr>";
+
+                    lobjSB.Replace("^additionalcharges^", lstrtemp);
+
+                    //'If pbhidfar = True Then
+                    //'    lstrtemp = ""
+                    //'Else
+
+                    //'    If lstrtax <> "" Then
+                    //'        lstr = lstrtax.Split("|")
+                    //'        For i = 0 To lstr.Length - 2
+                    //'            lstrtemp = "Taxes : " & lstr(i).Replace("INR", "").TrimStart("%").Replace("!%", ",").Replace("%", " = ")
+                    //'        Next
+                    //'    Else
+
+                    //'        lstrtemp = ""
+                    //'    End If
+                    //'End If
+                    //lstr = lstrtax.Split("|")
+                    //For i = 0 To lstr.Length - 2
+                    //    lstrtemp = "Taxes : " & lstr(i).Replace("INR", "").TrimStart("%").Replace("!%", ",").Replace("%", " = ")
+                    //Next
+
+                    lobjSB.Replace("^description^", lstrTaxSplit);
+
+                    //If ldtrtemp.Trim <> "" Then displaystr.Append("<tr><td>ID proof :" + ldtrtemp + " </td></tr>")
+                    //displaystr.Append("</table></td></tr>")
+                    //displaystr.Append("<tr><td valign=top height=10></td></tr>")
+                    string lstrDiscPath;
+                    if (pstrbill[13] == "I")
+                    {
+                        if (ConfigurationManager.AppSettings["intlccholdairlines"].Contains(getAirLineCode(Convert.ToString(pstrbill[4].Split('*')[0])) + ","))
+                        {
+                            lstrDiscPath = System.AppDomain.CurrentDomain.BaseDirectory + ConfigurationManager.AppSettings["disclaimerpath"].ToString() + "A" + Convert.ToString(pstrbill[4].Split('*')[0]) + ".dis";
+                        }
+                        else
+                        {
+                            lstrDiscPath = System.AppDomain.CurrentDomain.BaseDirectory + ConfigurationManager.AppSettings["disclaimerpath"].ToString() + "International_FSC.dis";
+                        }
+                    }
+                    else
+                    {
+                        lstrDiscPath = System.AppDomain.CurrentDomain.BaseDirectory + ConfigurationManager.AppSettings["disclaimerpath"].ToString() + "A" + Convert.ToString(pstrbill[4].Split('*')[0]) + ".dis";
+                    }
+                    //Dim lobjWebRqst As HttpWebRequest
+                    //Dim lobjWebRes As HttpWebResponse
+                    StreamReader sr;
+                    //lobjWebRqst = CType(WebRequest.Create(lstrDiscPath), HttpWebRequest)
+                    //lobjWebRqst.Method = "GET"
+                    //lobjWebRes = CType(lobjWebRqst.GetResponse(), HttpWebResponse)
+                    try
+                    {
+                        sr = new StreamReader(lstrDiscPath);
+                        lCanContent = sr.ReadToEnd();
+                        sr.Close();
+                    }
+                    catch (Exception ex)
+                    {
+                        sr = new StreamReader(System.AppDomain.CurrentDomain.BaseDirectory + ConfigurationManager.AppSettings["disclaimerpath"].ToString() + "A.dis");
+                        lCanContent = sr.ReadToEnd();
+                        sr.Close();
+                        //      lobjerror.Err_Handler("CLIENTEASETICKET : clsease", "displayticketnew1:disclaimer", ex.Message);
+                        lobjArmErrorLog.Err_Handler(ex, "Common", "displayticketnew1");
+                    }
+
+                    //sr = New StreamReader(lobjWebRes.GetResponseStream)
+
+                    char[] lstrSplt = { ("~!@#$".ToCharArray())[0] };
+                    lCanContent = lCanContent.Split(lstrSplt)[0];
+                    lCanContent = lCanContent.Replace("\r", "<br>");
+                    lCanContent = lCanContent.Replace("{u}", "<u>");
+                    lCanContent = lCanContent.Replace("{/u}", "</u>");
+                    lCanContent = lCanContent.Replace("{b}", "<b>");
+                    lCanContent = lCanContent.Replace("{/b}", "</b>");
+                    lCanContent = lCanContent.Replace("{i}", "<i>");
+                    lCanContent = lCanContent.Replace("{/i}", "</i>");
+                    lCanContent = lCanContent.Replace("{a}", "<b><u>");
+                    lCanContent = lCanContent.Replace("{/a}", "</b></u>");
+
+                    lCanContent = lCanContent.Replace("{t}", "     ");
+                    lCanContent = lCanContent.Replace("{ul}", "<ul type='disc' style='padding-left:20px;'>");
+                    lCanContent = lCanContent.Replace("{/ul}", "</ul>");
+                    char[] lstrMSplt = { ("{l}".ToCharArray())[0] };
+                    string[] strArr = lCanContent.Split(lstrMSplt);
+                    int xx = 0;
+                    lCanContent = "";
+                    for (xx = 0; xx <= strArr.Length - 1; xx++)
+                    {
+                        if (strArr[xx].Trim() != "")
+                        {
+                            if (xx == 0)
+                            {
+                                lCanContent += strArr[xx];
+                            }
+                            else
+                            {
+                                //lCanContent += "<li>" & strArr(xx) & "</li>"
+                                lCanContent += strArr[xx];
+                            }
+
+                        }
+                    }
+                    //lCanContent = lCanContent.Replace("{l}", "<li>")
+                    string lstrPageBreak = "";
+                    if (pstrInput.Split('#').Length > 2)
+                    {
+                        if (lintcnt == 0)
+                        {
+                            lstrPageBreak += "<p style='page-break-before:always;'></p>";
+                        }
+                        else
+                        {
+                            lstrPageBreak += "<p style='page-break-before:avoid;'></p>";
+                        }
+                    }
+                    else
+                    {
+                        lstrPageBreak += "<p style='page-break-before:avoid;'></p>";
+                    }
+                    lobjSB.Replace("^distextdoc^", lCanContent);
+                    lobjSB.Replace("^pagebreak^", lstrPageBreak);
+                }
+                displaystr = lobjSB.ToString();
+                return displaystr.ToString();
+            }
+            catch (Exception ex)
+            {
+                // lobjerror.Err_Handler("CLIENTEASETICKET : clsease", "displayticketnew1", ex.Message);
+                lobjArmErrorLog.Err_Handler(ex, "Common", "displayticketnew1");
+                return "";
+            }
+        }
+
+        //IndividualCopy
+        public string displayticketnew(string pstrInput, bool pbhidfar, bool blIndividualCopy, int bAppflag)
+        {
+
+            int i = 0;
+            int j;
+            int lintcnt;
+
+            try
+            {
+                string displaystr;
+                StreamReader lobjSR;
+                StringBuilder lobjSB = new StringBuilder();
+                double dblRescheduleCharge;
+                double dblReschedulePenalty;
+                double dblSportsCharge;
+                string[] larrpax;
+                string[] larrTickets;
+                string lstrTerminalID = "";
+                pstrInput.Split('#').ToString();
+                lstrTerminalID = pstrInput.Split('?')[1].Substring(0, 12);
+
+                larrTickets = pstrInput.Split('#');
+
+                for (lintcnt = 0; lintcnt <= larrTickets.GetUpperBound(0) - 1; lintcnt++)
+                {
+                    string lstrPageBreak = "";
+                    for (int lCntPax = 0; lCntPax <= larrTickets[lintcnt].Split('~')[20].Split('^').GetUpperBound(0) - 1; lCntPax++)
+                    {
+                        string lstrPAXType = "";
+                        string lstrtemp;
+                        string lstrtempsub;
+                        string lstrpaymentmode;
+                        lobjSR = new StreamReader(System.AppDomain.CurrentDomain.BaseDirectory + ConfigurationManager.AppSettings["ticketpath"] + "AirlineTicket.htm");
+                        lobjSB.Append(lobjSR.ReadToEnd());
+                        lobjSR.Close();
+
+                        if (getTravelAgentLogo(lstrTerminalID) != "")
+                        {
+                            lstrtemp = "<img src='" + ConfigurationManager.AppSettings["DomainURL"].ToString() + getTravelAgentLogo(lstrTerminalID) + "' alt='logo'>";
+                        }
+                        else
+                        {
+                            lstrtemp = "";
+                        }
+                        lobjSB.Replace("^hlogo^", lstrtemp);
+
+                        lstrtemp = "<img alt='' src='https://biyaheko.com/style/biyaheko/images/logo.gif' width='130 height=40'>";
+                        //Biyahe Ko
+                        if (bAppflag == 2)
+                        {
+                            lstrtemp = "<img alt='ticketlogo' src='" + ConfigurationManager.AppSettings["DomainURL"].ToString() + "style/biyaheko/images/ticket-logo.gif' width='76' height='14'>";
+                            //TSS
+                        }
+                        else if (bAppflag == 3)
+                        {
+                            lstrtemp = "<img alt='ticketlogo' src='" + ConfigurationManager.AppSettings["DomainURL"].ToString() + "style/tss/images/ticket-logo.gif' width='76' height='14'>";
+                        }
+
+                        lobjSB.Replace("^logo^", lstrtemp);
+
+
+                        //'lstrtemp = "<img src='" & ConfigurationManager.AppSettings("DomainURL").ToString() & "images/ticket-logo.gif' width='76' height='14'>"
+                        //'lobjSB.Replace("^logo^", lstrtemp)
+
+                        dblRescheduleCharge = 0;
+                        dblReschedulePenalty = 0;
+                        dblSportsCharge = 0;
+
+                        double ldbasicfare = 0;
+                        double ldtax = 0;
+                        double ldeqamt = 0;
+                        double ldtransfee = 0;
+                        double ldblservicetax = 0;
+                        double ldblservicetaxnew = 0;
+                        string[] lstr;
+                        string[] lstr1;
+                        string ldtrtemp;
+                        string lstrtax = "";
+                        string lstrcrcode = "";
+                        string lstridproof = "";
+                        string lCanContent = "";
+                        string lstraddress = "";
+                        string lstrCRSPNRNo = "";
+                        bool isMealBaggageNeed = false;
+                        string[] pstrbill = larrTickets[lintcnt].Split('~');
+
+                        lstraddress += pstrbill[19].Split('*')[0] + "<br>";
+                        if (pstrbill[19].Split('*')[1] != "")
+                        {
+                            lstraddress += "<b><span class='hermes'>" + pstrbill[19].Split('*')[1] + "</span></b><br>";
+                        }
+                        if (pstrbill[19].Split('*')[2] != "")
+                        {
+                            lstraddress += "<b><span class='hermes'>" + pstrbill[19].Split('*')[2] + "</span></b><br>";
+                        }
+                        if (pstrbill[19].Split('*')[3] != "")
+                        {
+                            lstraddress += "<b><span class='hermes'>" + pstrbill[19].Split('*')[3] + "</span></b><br>";
+                        }
+                        if (pstrbill[19].Split('*')[4] != "")
+                        {
+                            lstraddress += "<b><span class='hermes'>" + pstrbill[19].Split('*')[4] + "</span></b><br>";
+                        }
+                        if (pstrbill[19].Split('*')[5] != "")
+                        {
+                            lstraddress += "<b><span class='hermes'>" + pstrbill[19].Split('*')[5] + "</span></b><br>";
+                        }
+                        if (pstrbill[19].Split('*')[6] != "")
+                        {
+                            lstraddress += "<b><span class='hermes'>" + pstrbill[19].Split('*')[6] + "</span></b><br>";
+                        }
+                        if (pstrbill[19].Split('*')[7] != "")
+                        {
+                            lstraddress += "<b><span class='hermes'>" + pstrbill[19].Split('*')[7] + "</span></b><br>";
+                        }
+                        lobjSB.Replace("^AgencyAddress^", lstraddress);
+                        lobjSB.Replace("^hermesid^", pstrbill[1]);
+
+
+                        lstrtempsub = pstrbill[1].ToString();
+                        lstrtemp = "";
+                        //lstrtemp = "<img src='" & ConfigurationManager.AppSettings("airimgwebpath").ToString() & "!asterisk.gif' width='14' height='22'>"
+                        //For i = 0 To lstrtempsub.Length - 1
+                        //    lstrtemp += ("<img src='" & ConfigurationManager.AppSettings("airimgwebpath").ToString()) + lstrtempsub(i) & ".gif " & "' width='14' height='22'>"
+                        //Next
+                        //lstrtemp += "<img src='" & ConfigurationManager.AppSettings("airimgwebpath").ToString() & "!asterisk.gif' width='14' height='22'>"
+                        lobjSB.Replace("^hermespnr^", lstrtemp);
+                        lobjSB.Replace("^issued^", BKDateFormat(pstrbill[14].Split(' ')[0], "dd-MMM-yyyy", false));
+
+                        string[] larrAirlineDetails;
+                        larrAirlineDetails = pstrbill[4].Split('!');
+                        //lstrtemp = "<table align='left' width='100%'>"
+
+                        for (int lintAirline = 0; lintAirline <= larrAirlineDetails.Length - 2; lintAirline++)
+                        {
+                            lstrtemp += "<tr><td valign='top'  class='hermes'><b>ISSUED BY:</b> <span class='hermes'>";
+                            lstr = larrAirlineDetails[lintAirline].Split('*');
+
+                            if (System.IO.File.Exists(System.AppDomain.CurrentDomain.BaseDirectory + "\\images\\logos\\" + "A" + Convert.ToString(lstr[0]) + ".gif"))
+                            {
+                                lstrtemp += "<img alt='logo' src='" + ConfigurationManager.AppSettings["DomainURL"] + "images/logos/" + "A" + Convert.ToString(lstr[0]) + ".gif'/>";
+                            }
+                            else
+                            {
+                                lstrtemp += "<img alt='logo' src='" + ConfigurationManager.AppSettings["DomainURL"] + "images/logos/" + "A" + Convert.ToString(lstr[0]) + ".bmp'/>";
+                            }
+
+
+                            lstrtempsub = lstr[1];
+
+                            lstrtemp += "<br /></span></td><td><table align='center'><tr><td valign='middle' nowrap='nowrap' class='hermes'>" + "<b>AIRLINE PNR: </b></td><td align='left' valign='middle' style='font-size:large;' nowrap='nowrap' class='hermes'><b>" + " " + lstrtempsub + "</b></td></tr></table></td>";
+
+                            lstrtemp += "<td class='hermes' align='left'>";
+                            lstrtemp += lstr[2] + "," + lstr[3] + "," + lstr[4] + "," + "<br/>" + lstr[5] + "<br/>" + lstr[6] + "<br/>" + (lstr[7] != "" ? "Phone:" + lstr[7] + ", <br/>" : "") + (lstr[8] != "" ? "Fax:" + lstr[8] + ", <br/>" : "") + (lstr[9].Replace("!", "") != "" ? "EMail:" + lstr[9].Replace("!", "") : "");
+                            lstrtemp += "</td></tr>";
+                        }
+                        //lstrtemp &= "</table>"
+
+
+                        lobjSB.Replace("^airlinedetails^", lstrtemp);
+
+
+
+                        lstrtemp = "";
+                        string[] larrpass;
+                        double ldblGrossAmount = 0;
+                        double lblGrossbasicAmnt = 0;
+                        double lblInsuranceAmt = 0;
+
+                        double ldblTotalTax = 0;
+                        //Dim ldblTotServiceTax As Double = 0
+                        double ldblTotalEquivalentFare = 0;
+
+                        string lstrPAX = "";
+                        string lstrItinerary = "";
+                        string lstrSPRequest = "";
+
+                        string[] larrAllPNRs;
+                        string[] larrOnePnr;
+                        string[] larrPerPax;
+                        string[] larrPerSegment;
+                        string[] larrTaxDesc;
+                        larrAllPNRs = pstrbill[20].Split('^');
+
+                        //For i = 0 To larrAllPNRs.Length - 2'Commented for individual ticket copy
+
+                        //{
+                        larrOnePnr = larrAllPNRs[lCntPax].Split('`');
+                        larrPerPax = larrOnePnr[4].Split('@');
+                        //lstr1 = larrAllPNRs(i).Split("@")
+
+                        ldtax = 0;
+                        ldtransfee = 0;
+                        //ldblservicetax = 0
+                        ldbasicfare = 0;
+                        ldblGrossAmount = 0;
+                        ldtax = 0;
+                        ldeqamt = 0;
+
+                        //Itinerary
+                        //If lCntPax = 0 Then End If
+                        lstrItinerary += ("<tr><td   colspan='2'><table  width=100% class='txt' style='font-weight: bold;' cellpadding=0 cellspacing=0><tr class=Hermes bgcolor=#CCCCCC><th>ORIGIN</th><th>DESTINATION</th><th>FLIGHT NO</th><th>CLASS</th><th>DEP.DATE & TIME</th><th>ARR.DATE & TIME</th><th>FARE BASIS</th></tr>");
+
+                        //Meals & Baggage
+                        //If lCntPax = 0 Then 
+                        lstrSPRequest += ("<tr><td colspan='2'><table  width=100% class='txt' style='font-weight: bold;' cellpadding=0 cellspacing=0><tr bgcolor='#CCCCCC'><th>ORIGIN</th><th>DESTINATION</th><th>TICKET NO</th><th>SPECIAL REQUEST</th><th>FREQUENT FLYER NO</th><th>MEALS</th><th>SEAT PREFERENCE</th><th>NOT VALID BEFORE</th><th>NOT VALID AFTER</th><th>ALLOW</th></tr>");
+                        string lstrTaxS = "";
+                        for (j = 0; j <= larrPerPax.Length - 2; j++)
+                        {
+                            larrPerSegment = larrPerPax[j].Split('*');
+                            ldbasicfare += Convert.ToDouble(larrPerSegment[26]);
+                            ldeqamt += Convert.ToDouble(larrPerSegment[27]);
+                            ldtransfee += Convert.ToDouble(larrPerSegment[30]);
+                            ldblservicetax += Convert.ToDouble(larrPerSegment[32]);
+
+
+                            larrTaxDesc = larrPerSegment[28].Split('!');
+                            for (int lintTaxCount = 0; lintTaxCount <= larrTaxDesc.GetUpperBound(0); lintTaxCount++)
+                            {
+                                if (larrTaxDesc[lintTaxCount].Trim() != "")
+                                {
+                                    if (!(larrTaxDesc[lintTaxCount].Split('%')[1] == "Reschedule Charges" | larrTaxDesc[lintTaxCount].Split('%')[1] == "Reschedule Penalty" | larrTaxDesc[lintTaxCount].Split('%')[1] == "Sports Charges"))
+                                    {
+                                        ldtax += Convert.ToDouble(larrTaxDesc[lintTaxCount].Split('%')[2]);
+                                        string lstrTaxDes = "";
+                                        lstrTaxDes = larrTaxDesc[lintTaxCount].Split('%')[1].Trim().ToUpper();
+                                        if (lstrTaxDes.Contains("TOTAL TAX") | lstrTaxDes.Contains("TOTALTAX"))
+                                        {
+                                            lstrTaxDes = "TOTAL TAX";
+                                        }
+                                        lstrTaxS += lstrTaxDes + "-" + larrTaxDesc[lintTaxCount].Split('%')[2] + ",";
+                                        //lstrTaxS += larrTaxDesc(lintTaxCount).Split("%")(1) & "-" & larrTaxDesc(lintTaxCount).Split("%")(2) & ","
+                                    }
+                                    else
+                                    {
+                                        if (larrTaxDesc[lintTaxCount].Split('%')[1] == "Reschedule Charges")
+                                        {
+                                            dblRescheduleCharge += Convert.ToDouble(larrTaxDesc[lintTaxCount].Split('%')[2]);
+                                        }
+                                        if (larrTaxDesc[lintTaxCount].Split('%')[1] == "Reschedule Penalty")
+                                        {
+                                            dblReschedulePenalty += Convert.ToDouble(larrTaxDesc[lintTaxCount].Split('%')[2]);
+                                        }
+                                        if (larrTaxDesc[lintTaxCount].Split('%')[1] == "Sports Charges")
+                                        {
+                                            dblSportsCharge += Convert.ToDouble(larrTaxDesc[lintTaxCount].Split('%')[2]);
+                                        }
+                                    }
+                                }
+                            }
+                            lstrTaxS += "!";
+                            //Itinerary Details
+                            //If lCntPax = 0 Then 
+                            lstrItinerary += "<tr><td>" + getAirport(larrPerSegment[3], pstrbill[13]) + (larrPerSegment[4].Trim() != "" ? " ( " + larrPerSegment[4] + " ) " : "") + "</td><td>" + getAirport(larrPerSegment[6], pstrbill[13]) + (larrPerSegment[7].Trim() != "" ? " ( " + larrPerSegment[7] + " ) " : "") + "</td><td>" + Convert.ToString(larrPerSegment[1]) + "</td><td>" + larrPerSegment[12] + "</td><td>" + BKDateFormat(larrPerSegment[5].Split(' ')[0], "dd-MMM-yyyy", true) + " " + larrPerSegment[5].Split(' ')[1] + "</td><td>" + BKDateFormat(larrPerSegment[8].Split(' ')[0], "dd-MMM-yyyy", true) + " " + larrPerSegment[8].Split(' ')[1] + "</td><td>" + (larrPerSegment[14] != "" ? larrPerSegment[14] : "-") + "</td></tr>";
+
+                            //Meals & Baggage Details                         
+                            //larrPerSegment(17)-Baggage
+                            //larrPerSegment(21)-Spl Request
+                            //larrPerSegment(22)-Meals
+                            //larrPerSegment(23)-Seat Preferrence
+                            lstrSPRequest += "<tr><td>" + getAirport(larrPerSegment[3], pstrbill[13]) + "</td><td>" + getAirport(larrPerSegment[6], pstrbill[13]) + "</td><td>" + larrOnePnr[0] + "</td><td align='center'>" + (larrPerSegment[21].Trim() == "" ? "-" : larrPerSegment[21]) + "</td><td align='center'>-</td><td>" + (larrPerSegment[22].Trim() == "" ? "-" : larrPerSegment[22]) + "</td><td align='center'>" + (larrPerSegment[23].Trim() == "" ? "-" : larrPerSegment[23]) + "</td><td align='center'>-</td><td align='center'>-</td><td>" + (larrPerSegment[17].Trim() == "" ? "-" : larrPerSegment[17]) + "</td></tr>";
+
+                            if ((larrPerSegment[17].Trim() != "" | larrPerSegment[21].Trim() != "" | larrPerSegment[22].Trim() != "" | larrPerSegment[23].Trim() != "") & isMealBaggageNeed == false)
+                            {
+                                isMealBaggageNeed = true;
+                            }
+                        }
+                        string[] arrTaxSplit = lstrTaxS.Split('!');
+                        int lintTaxSplit;
+                        string lstrTaxSplit = "";
+                        string[] arrTaxS = arrTaxSplit[0].Split(',');
+                        for (int linTS = 0; linTS <= arrTaxS.Length - 2; linTS++)
+                        {
+                            //Dim ldecTaxTot As Decimal = 0
+                            //Dim lstrTaxDesc As String = ""
+                            //lstrTaxDesc = arrTaxS(linTS).Split("-")(0)
+                            decimal ldecTaxTot = 0;
+                            string lstrTaxDesc = "";
+                            lstrTaxDesc = arrTaxS[linTS].Split('-')[0].Trim();
+                            for (lintTaxSplit = 0; lintTaxSplit <= arrTaxSplit.Length - 2; lintTaxSplit++)
+                            {
+                                if (linTS <= arrTaxSplit[lintTaxSplit].Split(',').Length - 2)
+                                {
+                                    if (arrTaxSplit[lintTaxSplit].Split(',')[linTS].Split('-')[0].Trim() == lstrTaxDesc)
+                                    {
+                                        ldecTaxTot += Convert.ToDecimal(arrTaxSplit[lintTaxSplit].Split(',')[linTS].Split('-')[1]);
+                                    }
+                                    else
+                                    {
+                                        string[] arrSubTax = arrTaxSplit[lintTaxSplit].Split(',');
+                                        for (int lintsubtax = 0; lintsubtax <= arrSubTax.Length - 2; lintsubtax++)
+                                        {
+                                            if (arrSubTax[lintsubtax].Split('-')[0].Trim() == lstrTaxDesc)
+                                            {
+                                                ldecTaxTot += Convert.ToDecimal(arrSubTax[lintsubtax].Split('-')[1]);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            if (ldecTaxTot != 0)
+                            {
+                                if (!lstrTaxDesc.Contains("MTCHARGES"))
+                                {
+                                    lstrTaxSplit += lstrTaxDesc + " - " + Convert.ToString(ldecTaxTot) + " , ";
+                                }
+                            }
+                        }
+                        if (lstrTaxSplit != "")
+                        {
+                            lstrTaxSplit = "<b>Taxes & Others : </b>" + lstrTaxSplit.Substring(0, lstrTaxSplit.Length - 3);
+                        }
+
+                        lblGrossbasicAmnt += ldbasicfare;
+                        ldblTotalEquivalentFare += ldeqamt;
+
+                        double lintpax = Convert.ToDouble(pstrbill[9]) + Convert.ToDouble(pstrbill[10]) + Convert.ToDouble(pstrbill[11]);
+                        double ldlbExtra = Convert.ToDouble(pstrbill[21]) / lintpax;
+                        string lstrIDProofNo = "";
+                        ldtax += ldlbExtra + ldtransfee;
+                        ldblGrossAmount += ldeqamt + ldtax;
+                        ldblTotalTax += ldtax;
+                        larrpass = larrOnePnr[2].Split('*');
+                        if (Convert.ToDouble(larrpass[4]) > Convert.ToDouble(ConfigurationManager.AppSettings["SeniorCitizen"].ToString()) & larrpass[6] != "")
+                        {
+                            lstrIDProofNo = larrpass[6];
+                        }
+                        //Pax Details
+                        //If lCntPax = 0 Then
+                        if (lstrIDProofNo == "")
+                        {
+                            if (pbhidfar)
+                            {
+                                lstrPAX += ("<tr><td   height=24 colspan='2' style='padding-top:10px;'><table  width='80%' class='txt' cellpadding=0 cellspacing=0><tr class=Hermes bgcolor=#CCCCCC><th>PASSENGER NAME</th><th>TICKET NO</th><th>PAX TYPE</th><th>STATUS</th></tr>");
+                            }
+                            else
+                            {
+                                lstrPAX += ("<tr><td   height=24 colspan='2' style='padding-top:10px;'><table  width='80%' class='txt' cellpadding=0 cellspacing=0><tr class=Hermes bgcolor=#CCCCCC><th>PASSENGER NAME</th><th>TICKET NO</th><th>BASIC FARE</th><th>TAX & OTHERS</th><th>GROSS AMOUNT</th><th>PAX TYPE</th><th>STATUS</th></tr>");
+                            }
+                        }
+                        else
+                        {
+                            if (pbhidfar)
+                            {
+                                lstrPAX += ("<tr><td   height=24 colspan='2' style='padding-top:10px;'><table  width='80%' class='txt' cellpadding=0 cellspacing=0><tr class=Hermes bgcolor=#CCCCCC><th>PASSENGER NAME</th><th>TICKET NO</th><th>PAX TYPE</th><th>ID PROOF</th><th>STATUS</th></tr>");
+                            }
+                            else
+                            {
+                                lstrPAX += ("<tr><td   height=24 colspan='2' style='padding-top:10px;'><table  width='80%' class='txt' cellpadding=0 cellspacing=0><tr class=Hermes bgcolor=#CCCCCC><th>PASSENGER NAME</th><th>TICKET NO</th><th>BASIC FARE</th><th>TAX & OTHERS</th><th>GROSS AMOUNT</th><th>PAX TYPE</th><th>ID PROOF</th><th>STATUS</th></tr>");
+                            }
+                        }
+
+                        //End If
+
+
+                        switch (Convert.ToInt32(larrpass[0]))
+                        {
+                            case 1:
+                                lstrPAXType = "Adult";
+                                break;
+                            case 2:
+                                lstrPAXType = "Child";
+                                break;
+                            case 3:
+                                lstrPAXType = "Infant";
+                                break;
+                            default:
+                                break; // TODO: might not be correct. Was : Exit Select
+
+                                break;
+                        }
+                        if (lstrIDProofNo == "")
+                        {
+                            if (pbhidfar == true)
+                            {
+                                lstrPAX += ("<tr><td style='font-weight: bold;'>" + larrpass[1] + " " + larrpass[2] + " " + larrpass[3] + "</td><td>" + larrOnePnr[0] + "</td><td>" + lstrPAXType + "</td><td>" + (larrpass[12].ToUpper() == "LIVE" ? "CONFIRM" : larrpass[12].ToUpper()) + "</td></tr>");
+                                //</table><td></tr><tr><td height='5px'></td></tr>")
+                            }
+                            else
+                            {
+                                lstrPAX += ("<tr><td style='font-weight: bold;'>" + larrpass[1] + " " + larrpass[2] + " " + larrpass[3] + "</td><td>" + larrOnePnr[0] + "</td><td>" + string.Format("{0:F2}", ldbasicfare) + "</td><td>" + string.Format("{0:F2}", ldtax + ldblservicetax) + "</td><td>" + string.Format("{0:F2}", Convert.ToDouble(ldblGrossAmount + ldblservicetax)) + "</td><td>" + lstrPAXType + "</td><td>" + (larrpass[12].ToUpper() == "LIVE" ? "CONFIRM" : larrpass[12].ToUpper()) + "</td></tr>");
+                                //</table><td></tr><tr><td height='5px'></td></tr>")
+                            }
+                        }
+                        else
+                        {
+                            if (pbhidfar == true)
+                            {
+                                lstrPAX += ("<tr><td style='font-weight: bold;'>" + larrpass[1] + " " + larrpass[2] + " " + larrpass[3] + "</td><td>" + larrOnePnr[0] + "</td><td>" + lstrPAXType + "</td><td>" + lstrIDProofNo + "</td><td>" + (larrpass[12].ToUpper() == "LIVE" ? "CONFIRM" : larrpass[12].ToUpper()) + "</td></tr>");
+                                //</table><td></tr><tr><td height='5px'></td></tr>")
+                            }
+                            else
+                            {
+                                lstrPAX += ("<tr><td style='font-weight: bold;'>" + larrpass[1] + " " + larrpass[2] + " " + larrpass[3] + "</td><td>" + larrOnePnr[0] + "</td><td>" + string.Format("{0:F2}", ldbasicfare) + "</td><td>" + string.Format("{0:F2}", ldtax + ldblservicetax) + "</td><td>" + string.Format("{0:F2}", Convert.ToDouble(ldblGrossAmount + ldblservicetax)) + "</td><td>" + lstrPAXType + "</td><td>" + lstrIDProofNo + "</td><td>" + (larrOnePnr[12].ToUpper() == "LIVE" ? "CONFIRM" : larrpass[12].ToUpper()) + "</td></tr>");
+                                //</table><td></tr><tr><td height='5px'></td></tr>")
+                            }
+                        }
+
+                        //}
+                        //Next 'Commented for individual copy
+                        lstrItinerary += ("</table></td></tr>");
+                        lstrSPRequest += ("</table></td></tr>");
+                        lstrPAX += ("</table></td></tr>");
+
+                        lstrtemp = "";
+                        //System.AppDomain.CurrentDomain.BaseDirectory & "\images\logos\logo_" & pstrbill(0).Substring(2, 12) & ".gif"
+                        if (getTravelAgentLogo(lstrTerminalID) != "")
+                        {
+                            lstrtemp = "<img src='" + ConfigurationManager.AppSettings["DomainURL"].ToString() + getTravelAgentLogo(lstrTerminalID) + "' alt='logo'>";
+                        }
+                        //If File.Exists(System.AppDomain.CurrentDomain.BaseDirectory & "\images\logos\logo_" & pstrbill(0).Substring(2, 12) & ".gif") Then
+                        //    lstrtemp = "<img src='" & ConfigurationManager.AppSettings("DomainURL").ToString() & "images/logos/logo_" & pstrbill(0).Substring(2, 12) & ".gif' alt='logo'>"
+                        //End If
+
+                        lobjSB.Replace("^agentlogo^", lstrtemp);
+
+                        lobjSB.Replace("^passdetails^", lstrPAX);
+                        lobjSB.Replace("^itinerary^", lstrItinerary);
+                        if (pbhidfar == true)
+                        {
+                            lobjSB.Replace("^hidefaredetails^", "display:none;");
+                        }
+                        else
+                        {
+                            lobjSB.Replace("^hidefaredetails^", "display:block;");
+                        }
+
+                        if (isMealBaggageNeed)
+                        {
+                            lobjSB.Replace("^sprequest^", lstrSPRequest);
+                        }
+                        else
+                        {
+                            lobjSB.Replace("^sprequest^", "");
+                        }
+
+
+                        //ldblTotalTax += CDbl(pstrbill(21))
+
+                        if (pstrbill[18].Split('*')[0] == "8")
+                        {
+                            lstrpaymentmode = "Payment Gateway";
+                        }
+                        else if (pstrbill[18].Split('*')[0] == "7")
+                        {
+                            lstrpaymentmode = "Agent";
+                        }
+                        else
+                        {
+                            lstrpaymentmode = "Agent Topup Deposit";
+                        }
+                        //For CRS PNR
+                        lstrtemp = "";
+                        lstrtemp = pstrbill[6].Split('%')[0];
+                        if (lstrtemp.Trim() != "")
+                        {
+                            lstrtemp = "<table bordercolor='#000000' border='0' cellpadding='0' class='txt' cellspacing='0'><tr>" + "<th>CRS PNR</th></tr>" + "<tr><td>" + lstrtemp + "</td></tr></table>";
+                        }
+                        if ((pstrInput.Split('?')[3] != ""))
+                        {
+                            lblInsuranceAmt = Convert.ToDouble(pstrInput.Split('?')[3]);
+                            lstrTaxSplit = lstrTaxSplit + ", AIG Insurance Fee - " + string.Format("{0:F2}", lblInsuranceAmt);
+                        }
+                        else
+                        {
+                            lobjSB.Replace("^Insurancehide^", "hide");
+                        }
+                        lobjSB.Replace("^crspnr^", (lstrtemp.Trim() != "" ? lstrtemp : "-"));
+                        lobjSB.Replace("^modeofpayment^", (lstrpaymentmode != "" ? lstrpaymentmode : "-"));
+                        lobjSB.Replace("^basefare^", string.Format("{0:F2}", lblGrossbasicAmnt));
+                        lobjSB.Replace("^equivalentfare^", string.Format("{0:F2}", ldblTotalEquivalentFare));
+                        lobjSB.Replace("^tax^", string.Format("{0:F2}", ldblTotalTax));
+                        //lobjSB.Replace("^tax^", String.Format("{0:F2}", ldblTotalTax - ldblservicetaxnew))
+                        lobjSB.Replace("^servicetax^", string.Format("{0:F2}", ldblservicetax));
+                        lobjSB.Replace("^grossfare^", string.Format("{0:F2}", ldblTotalTax + lblGrossbasicAmnt + dblRescheduleCharge + dblReschedulePenalty + ldblservicetax + lblInsuranceAmt));
+                        lobjSB.Replace("^gatewaycharges^", (pstrbill[25].Trim() != "" ? pstrbill[25] : "-"));
+                        lobjSB.Replace("^cancelpenalty^", (pstrbill[26].Trim() != "" ? pstrbill[26] : "-"));
+                        lobjSB.Replace("^faredetails^", "-");
+                        lobjSB.Replace("^issueexchange^", "-");
+                        lobjSB.Replace("^tourcode^", "-");
+                        lobjSB.Replace("^reschedulecharges^", dblRescheduleCharge.ToString());
+                        lobjSB.Replace("^reschedulepenalty^", dblReschedulePenalty.ToString());
+                        lobjSB.Replace("^Insurance^", string.Format("{0:F2}", lblInsuranceAmt));
+
+                        //additionalcharges
+                        lstrtemp = "";
+                        if (dblRescheduleCharge > 0)
+                            lstrtemp = "<tr><td align='left' bgcolor='#cccccc'><b>Reschedule Charges(PHP)</b></td><td align='right'>" + string.Format("{0:F2}", dblRescheduleCharge) + "</td></tr>";
+                        if (dblReschedulePenalty > 0)
+                            lstrtemp = lstrtemp + "<tr><td align='left' bgcolor='#cccccc'><b>Reschedule Penalty(PHP)</b></td><td align='right'>" + string.Format("{0:F2}", dblReschedulePenalty) + "</td></tr>";
+                        if (Convert.ToDecimal(pstrbill[26].Trim()) > 0)
+                            lstrtemp = lstrtemp + "<tr><td align='left' bgcolor='#cccccc'><b>Cancellation Penalty(PHP)</b></td><td align='right'>" + (pstrbill[26].Trim() != "" ? string.Format("{0:F2}", pstrbill[26]) : "-") + "</td></tr>";
+                        if (dblSportsCharge > 0)
+                            lstrtemp = lstrtemp + "<tr><td align='left' bgcolor='#cccccc'><b>Sports Charges(PHP)</b></td><td align='right'>" + string.Format("{0:F2}", dblSportsCharge) + "</td></tr>";
+
+                        lobjSB.Replace("^additionalcharges^", lstrtemp);
+
+                        //'If pbhidfar = True Then
+                        //'    lstrtemp = ""
+                        //'Else
+
+                        //'    If lstrtax <> "" Then
+                        //'        lstr = lstrtax.Split("|")
+                        //'        For i = 0 To lstr.Length - 2
+                        //'            lstrtemp = "Taxes : " & lstr(i).Replace("INR", "").TrimStart("%").Replace("!%", ",").Replace("%", " = ")
+                        //'        Next
+                        //'    Else
+
+                        //'        lstrtemp = ""
+                        //'    End If
+                        //'End If
+                        //lstr = lstrtax.Split("|")
+                        //For i = 0 To lstr.Length - 2
+                        //    lstrtemp = "Taxes : " & lstr(i).Replace("INR", "").TrimStart("%").Replace("!%", ",").Replace("%", " = ")
+                        //Next
+
+                        lobjSB.Replace("^description^", lstrTaxSplit);
+
+                        //If ldtrtemp.Trim <> "" Then displaystr.Append("<tr><td>ID proof :" + ldtrtemp + " </td></tr>")
+                        //displaystr.Append("</table></td></tr>")
+                        //displaystr.Append("<tr><td valign=top height=10></td></tr>")
+                        string lstrDiscPath;
+                        if (pstrbill[13] == "I")
+                        {
+                            if (ConfigurationManager.AppSettings["intlccholdairlines"].Contains(getAirLineCode(Convert.ToString(pstrbill[4].Split('*')[0])) + ","))
+                            {
+                                lstrDiscPath = System.AppDomain.CurrentDomain.BaseDirectory + ConfigurationManager.AppSettings["disclaimerpath"].ToString() + "A" + Convert.ToString(pstrbill[4].Split('*')[0]) + ".dis";
+                            }
+                            else
+                            {
+                                lstrDiscPath = System.AppDomain.CurrentDomain.BaseDirectory + ConfigurationManager.AppSettings["disclaimerpath"].ToString() + "International_FSC.dis";
+                            }
+                        }
+                        else
+                        {
+                            lstrDiscPath = System.AppDomain.CurrentDomain.BaseDirectory + ConfigurationManager.AppSettings["disclaimerpath"].ToString() + "A" + Convert.ToString(pstrbill[4].Split('*')[0]) + ".dis";
+                        }
+                        //Dim lobjWebRqst As HttpWebRequest
+                        //Dim lobjWebRes As HttpWebResponse
+                        StreamReader sr;
+                        //lobjWebRqst = CType(WebRequest.Create(lstrDiscPath), HttpWebRequest)
+                        //lobjWebRqst.Method = "GET"
+                        //lobjWebRes = CType(lobjWebRqst.GetResponse(), HttpWebResponse)
+                        try
+                        {
+                            sr = new StreamReader(lstrDiscPath);
+                            lCanContent = sr.ReadToEnd();
+                            sr.Close();
+                        }
+                        catch (Exception ex)
+                        {
+                            sr = new StreamReader(System.AppDomain.CurrentDomain.BaseDirectory + ConfigurationManager.AppSettings["disclaimerpath"].ToString() + "A.dis");
+                            lCanContent = sr.ReadToEnd();
+                            sr.Close();
+                            //   lobjerror.Err_Handler("CLIENTEASETICKET : clsease", "displayticketnew2:disclaimer", ex.Message);
+                            lobjArmErrorLog.Err_Handler(ex, "Common", "displayticketnew2");
+                        }
+
+                        //sr = New StreamReader(lobjWebRes.GetResponseStream)
+                        char[] lstrSplt = { ("~!@#$".ToCharArray())[0] };
+                        lCanContent = lCanContent.Split(lstrSplt)[0];
+                        lCanContent = lCanContent.Replace("\r", "<br>");
+                        lCanContent = lCanContent.Replace("{u}", "<u>");
+                        lCanContent = lCanContent.Replace("{/u}", "</u>");
+                        lCanContent = lCanContent.Replace("{b}", "<b>");
+                        lCanContent = lCanContent.Replace("{/b}", "</b>");
+                        lCanContent = lCanContent.Replace("{i}", "<i>");
+                        lCanContent = lCanContent.Replace("{/i}", "</i>");
+                        lCanContent = lCanContent.Replace("{a}", "<b><u>");
+                        lCanContent = lCanContent.Replace("{/a}", "</b></u>");
+
+                        lCanContent = lCanContent.Replace("{t}", "     ");
+                        lCanContent = lCanContent.Replace("{ul}", "<ul type='disc' style='padding-left:20px;'>");
+                        lCanContent = lCanContent.Replace("{/ul}", "</ul>");
+                        char[] lstrMSplt = { ("{l}".ToCharArray())[0] };
+                        string[] strArr = lCanContent.Split(lstrMSplt);
+                        int xx = 0;
+                        lCanContent = "";
+                        for (xx = 0; xx <= strArr.Length - 1; xx++)
+                        {
+                            if (strArr[xx].Trim() != "")
+                            {
+                                if (xx == 0)
+                                {
+                                    lCanContent += strArr[xx];
+                                }
+                                else
+                                {
+                                    lCanContent += "<li>" + strArr[xx] + "</li>";
+                                }
+
+                            }
+                        }
+                        //lCanContent = lCanContent.Replace("{l}", "<li>")
+
+                        //'If pstrInput.Split("#").Length > 2 Then
+                        //'    If lintcnt = 0 Then
+                        //'        lstrPageBreak += "<p style='page-break-before:always;'></p>"
+                        //'    Else
+                        //'        lstrPageBreak += "<p style='page-break-before:avoid;'></p>"
+                        //'    End If
+                        //'Else
+                        //'    lstrPageBreak += "<p style='page-break-before:avoid;'></p>"
+                        //'End If
+                        lobjSB.Replace("^distextdoc^", lCanContent);
+
+                    }
+                    lstrPageBreak = "<br style='page-break-after: always;' clear='all'/>";
+                    lobjSB.Replace("^pagebreak^", lstrPageBreak);
+                }
+                //Indiviual Ticket For
+
+                displaystr = lobjSB.ToString();
+                return displaystr.ToString();
+            }
+            catch (Exception ex)
+            {
+                //     lobjerror.Err_Handler("CLIENTEASETICKET : clsease", "displayticketnew2", ex.Message);
+                lobjArmErrorLog.Err_Handler(ex, "Common", "displayticketnew2");
+                return "";
+            }
+
+        }
+
+        public bool Emailsender(string pstrToMailid, string pstrCCMailids, string pstrBCCMailids, string pstrSubject, string pstrContentHTML, ref string pstrErrmsg)
+        {
+            MailMessage mMailMessage = new MailMessage();
+            try
+            {
+                mMailMessage.From = ConfigurationManager.AppSettings["sendusername"].ToString();
+                mMailMessage.To = pstrToMailid;
+                mMailMessage.Cc = pstrCCMailids;
+                mMailMessage.Bcc = pstrBCCMailids;
+                mMailMessage.Subject = pstrSubject;
+                mMailMessage.BodyFormat = MailFormat.Html;
+                mMailMessage.Body = pstrContentHTML.ToString();
+                mMailMessage.Priority = MailPriority.Normal;
+
+                mMailMessage.Fields.Add("http://schemas.microsoft.com/cdo/configuration/smtpauthenticate", "1");
+                mMailMessage.Fields.Add("http://schemas.microsoft.com/cdo/configuration/sendusername", ConfigurationManager.AppSettings["sendusername"].ToString());
+                mMailMessage.Fields.Add("http://schemas.microsoft.com/cdo/configuration/sendpassword", ConfigurationManager.AppSettings["sendpassword"].ToString());
+                mMailMessage.Fields.Add("http://schemas.microsoft.com/cdo/configuration/smtpserver", ConfigurationManager.AppSettings["smtpaddress"].ToString());
+                //"202.54.157.22")
+                mMailMessage.Fields.Add("http://schemas.microsoft.com/cdo/configuration/smtpserverport", 25);
+
+                SmtpMail.SmtpServer = ConfigurationManager.AppSettings["smtpaddress"].ToString();
+                SmtpMail.SmtpServer.Insert(0, ConfigurationManager.AppSettings["smtpaddress"].ToString());
+                //"202.54.157.22") 
+                SmtpMail.Send(mMailMessage);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                pstrErrmsg = ex.Message;
+                lobjArmErrorLog.Err_Handler(ex, "Common", "Emailsender");
+
+                return false;
+            }
+        }
+
+        public bool EmailsenderAttach(string Mailid, string Subject, string pstrContentHTML, string[] paths, ref string PstrErrorMsg)
+        {
+
+            MailMessage mMailMessage = new MailMessage();
+            System.Net.Mail.MailMessage lobjnew = new System.Net.Mail.MailMessage();
+            try
+            {
+                mMailMessage.From = ConfigurationManager.AppSettings["sendusername"].ToString();
+                mMailMessage.To = Mailid;
+                //    mMailMessage.Cc = pstrCCMailids;
+                //  mMailMessage.Bcc = pstrBCCMailids;
+                mMailMessage.Subject = Subject;
+                mMailMessage.BodyFormat = MailFormat.Html;
+                mMailMessage.Body = pstrContentHTML.ToString();
+                mMailMessage.Priority = System.Web.Mail.MailPriority.Normal;
+
+                mMailMessage.Fields.Add("http://schemas.microsoft.com/cdo/configuration/smtpauthenticate", "1");
+                mMailMessage.Fields.Add("http://schemas.microsoft.com/cdo/configuration/sendusername", ConfigurationManager.AppSettings["sendusername"].ToString());
+                mMailMessage.Fields.Add("http://schemas.microsoft.com/cdo/configuration/sendpassword", ConfigurationManager.AppSettings["sendpassword"].ToString());
+                mMailMessage.Fields.Add("http://schemas.microsoft.com/cdo/configuration/smtpserver", ConfigurationManager.AppSettings["smtpaddress"].ToString());
+                mMailMessage.Fields.Add("http://schemas.microsoft.com/cdo/configuration/smtpserverport", 25);
+
+                SmtpMail.SmtpServer = ConfigurationManager.AppSettings["smtpaddress"].ToString();
+                SmtpMail.SmtpServer.Insert(0, ConfigurationManager.AppSettings["smtpaddress"].ToString());
+                for (int i = 0; i < paths.Length; i++)
+                {
+                    MailAttachment attachedpath = new MailAttachment(paths[i]);
+                    mMailMessage.Attachments.Add(attachedpath);
+                }
+                SmtpMail.Send(mMailMessage);
+
+            }
+            catch (Exception ex)
+            {
+                lobjArmErrorLog.Err_Handler(ex, "Common", "EmailsenderAttach");
+            }
+            return true;
+        }
+
+        public string getAirport(string psrtAirportCode, string TravelType)
+        {
+
+            try
+            {
+
+                if (TravelType.ToUpper() == "D")
+                {
+                    XElement objDomestic;
+                    objDomestic = XElement.Load(System.AppDomain.CurrentDomain.BaseDirectory + "Content\\Sources\\xml\\city.xml");
+
+                    var varAirport = objDomestic.Elements().Where(airport => airport.Attribute("Station_ID").Value == psrtAirportCode);
+
+                    //Select airport
+
+                    foreach (var air in varAirport)
+                    {
+                        //return air.Attribute("Station_Name");
+                    }
+                    return psrtAirportCode;
+
+
+                }
+                else
+                {
+                    XElement xeInternational;
+                    xeInternational = XElement.Load(System.AppDomain.CurrentDomain.BaseDirectory + "Content\\Sources\\xml\\intAirports.xml");
+
+                    var varAirport = xeInternational.Elements().Where(airport => airport.Attribute("airportcode").Value == psrtAirportCode.Trim());
+                    //Select airport
+
+                    foreach (var air in varAirport)
+                    {
+                        //return air.Attribute("airport").ToString();
+                        return air.Attribute("airport").Value.ToString() + "(" + psrtAirportCode + ")";
+                    }
+                    return psrtAirportCode;
+
+                }
+
+            }
+            catch (Exception ex)
+            {
+                //   lobjerror.Err_Handler("BiyahekoTSS : CommonFunctions", "getAirport", ex.Message);
+                lobjArmErrorLog.Err_Handler(ex, "Common", "getAirport");
+                return null;
+            }
+        }
+
+        public string getAirLineCode(string psrtAirLineID)
+        {
+            try
+            {
+                switch (psrtAirLineID.Trim())
+                {
+                    case "1":
+                        //SpiceJet
+                        return "2P";
+                    case "3":
+                        //IndianAirLines
+                        return "3K";
+                    case "9":
+                        return "5J";
+                    case "6":
+                        //Philippine Airlines
+                        return "PR";
+                    default:
+                        DataSet ds = new DataSet();
+                        ds.ReadXml(System.AppDomain.CurrentDomain.BaseDirectory + "Content\\source\\xml\\InternationalAirlines.xml");
+                        DataTable dt;
+                        dt = ds.Tables[0];
+                        DataView dvAirlines = new DataView(dt, "AirlinesId ='" + psrtAirLineID + "'", "", DataViewRowState.CurrentRows);
+                        if (dvAirlines.Count > 0)
+                        {
+                            return dvAirlines[0]["IATACode"].ToString();
+                        }
+                        else
+                        {
+                            return "";
+                        }
+
+                        break;
+                }
+                return null;
+            }
+            catch (Exception ex)
+            {
+                //  lobjerror.Err_Handler("BiyahekoTSS : pgairsearch", "getAirLineId", ex.Message);
+                lobjArmErrorLog.Err_Handler(ex, "Common", "getAirLineCode");
+                return "";
+            }
+        }
+
+        public string getTravelAgentLogo(string pstrTravelAgent)
+        {
+            try
+            {
+                if (File.Exists(System.AppDomain.CurrentDomain.BaseDirectory + "/Content/Images/Logos/logo_" + pstrTravelAgent + ".gif") | File.Exists(System.AppDomain.CurrentDomain.BaseDirectory + "/Content/Images/Logos/logo_" + pstrTravelAgent + ".jpg") | File.Exists(System.AppDomain.CurrentDomain.BaseDirectory + "/Content/Images/Logos/logo_" + pstrTravelAgent + ".jpeg"))
+                {
+                    return ((!File.Exists(System.AppDomain.CurrentDomain.BaseDirectory + "Content/Images/Logos/logo_" + pstrTravelAgent + ".jpg") & !File.Exists(System.AppDomain.CurrentDomain.BaseDirectory + "Content/Images/Logos/logo_" + pstrTravelAgent + ".jpeg")) ? "Content/Images/Logos/logo_" + pstrTravelAgent + ".gif" : (File.Exists(System.AppDomain.CurrentDomain.BaseDirectory + "Content/Images/Logos/logo_" + pstrTravelAgent + ".jpg") ? "Content/Images/Logos/logo_" + pstrTravelAgent + ".jpg" : "Content/Images/Logos/logo_" + pstrTravelAgent + ".jpeg"));
+                }
+                else
+                {
+                    return "";
+                }
+            }
+            catch (Exception ex)
+            {
+                //lobjerror.Err_Handler("BiyahekoTSS : CommonFunctions", "getTravelAgentLogo", ex.Message);
+                lobjArmErrorLog.Err_Handler(ex, "Common", "getTravelAgentLogo");
+                return "";
+            }
+
+        }
+
+        public string BKDateFormat(string pstrDate, string pstrFormat, bool mode)
+        {
+            try
+            {
+                DateTime lstrConverDate;
+                if (!mode)
+                {
+                    lstrConverDate = Convert.ToDateTime(pstrDate.Split('/')[1] + "/" + pstrDate.Split('/')[0] + "/" + pstrDate.Split('/')[2]);
+                }
+                else { lstrConverDate = Convert.ToDateTime(pstrDate.Split('/')[0] + "/" + pstrDate.Split('/')[1] + "/" + pstrDate.Split('/')[2]); }
+                return String.Format(pstrDate, lstrConverDate);
+            }
+            catch (Exception ex)
+            {
+                //  lobjerror.Err_Handler("Biyaheko : CommonFunctions", "BKDateFormat", ex.Message);
+                lobjArmErrorLog.Err_Handler(ex, "Common", "BKDateFormat");
+                return "";
+            }
+        }
+
+        public bool GetEcpayAccountDetails(DataTable lobjECPAyDT, ref EcpayBill.ECPayAcDtls lobjECpayAc, ref string lstrErrMsg)
+        {
+            try
+            {
+                string lstrErrorCode = String.Empty;
+                string lstrError = String.Empty;
+                string ecPayAccountID = ConfigurationManager.AppSettings["ecPayAccountID"].ToString();
+                lobjECpayAc.ecPayAccountID = ecPayAccountID;
+                lobjECpayAc.ecPayBranchID = ConfigurationManager.AppSettings["ecPayBranchID"].ToString();
+                if (lobjECPAyDT.Rows.Count == 0)
+                {
+                    bool lboolECpay = lobjDataAccs.GetEcpayAccountDetails(ecPayAccountID, ref lobjECPAyDT, ref lstrError);
+                    if (lboolECpay)
+                    {
+                        if (lobjECPAyDT.Rows.Count > 0)
+                        {
+                            lobjECpayAc.ecPayUserName = lobjECPAyDT.Rows[0][1].ToString();
+                            lstrError = "";
+                            string ecPayPassword = "";
+                            lobjEnDecyrpt.Decrypt(lobjECPAyDT.Rows[0][2].ToString(), ref ecPayPassword, ref lstrError);
+                            if (lstrError == "")
+                            {
+                                lobjECpayAc.ecPayPassword = ecPayPassword;
+                                return true;
+                            }
+                            else
+                            {
+                                lstrErrMsg = lstrError;
+                                return false;
+                            }
+                        }
+                        else
+                        {
+                            lstrErrMsg = lstrError;
+                            return false;
+                        }
+                    }
+                    else
+                    {
+                        lstrErrMsg = lstrError;
+                        return false;
+                    }
+                }
+                else
+                {
+                    lobjECpayAc.ecPayUserName = lobjECPAyDT.Rows[0][1].ToString();
+                    lstrError = "";
+                    string ecPayPassword = "";
+                    lobjEnDecyrpt.Decrypt(lobjECPAyDT.Rows[0][2].ToString(), ref ecPayPassword, ref lstrError);
+                    if (lstrError == "")
+                    {
+                        lobjECpayAc.ecPayPassword = ecPayPassword;
+                        return true;
+                    }
+                    else
+                    {
+                        lstrErrMsg = lstrError;
+                        return false;
+                    }
+                }
+
+            }
+            catch (Exception ex)
+            {
+                // lobjerror.Err_Handler("Biyaheko : CommonFunctions", "GetEcpayAccountDetails", ex.Message);
+                lobjArmErrorLog.Err_Handler(ex, "Common", "GetEcpayAccountDetails");
+                lstrErrMsg = ex.Message;
+                return false;
+
+            }
+        }
+
+        public bool CheckQuota(string travelAgentID, string terminalID, string handShakeID, string operatorID, double amount, ref double lintBalance, ref string errotMSG)
+        {
+
+            string lstrErrCode = string.Empty;
+            string lstrErrMsg = string.Empty;
+            DataSet lobjDataset = new DataSet();
+            SqlParameter[] lobjparameter = new SqlParameter[7];
+            ARMDataTier.clsDataconnector lobjDataTier = new ARMDataTier.clsDataconnector(ARMDataTier.clsDataconnector.DATABASE.HERMES);
+            try
+            {
+                lobjparameter[0] = new SqlParameter();
+                lobjparameter[0].ParameterName = "@TERMINALID";
+                lobjparameter[0].DbType = DbType.String;
+                lobjparameter[0].Direction = ParameterDirection.Input;
+                lobjparameter[0].Value = terminalID;
+
+                lobjparameter[1] = new SqlParameter();
+                lobjparameter[1].ParameterName = "@TRAVELAGENTID";
+                lobjparameter[1].DbType = DbType.String;
+                lobjparameter[1].Direction = ParameterDirection.Input;
+                lobjparameter[1].Value = travelAgentID;
+
+                lobjparameter[2] = new SqlParameter();
+                lobjparameter[2].ParameterName = "@HANDSHAKEID";
+                lobjparameter[2].DbType = DbType.String;
+                lobjparameter[2].Direction = ParameterDirection.Input;
+                lobjparameter[2].Value = handShakeID;
+
+                lobjparameter[3] = new SqlParameter();
+                lobjparameter[3].ParameterName = "@OPERATORID";
+                lobjparameter[3].DbType = DbType.Int32;
+                lobjparameter[3].Direction = ParameterDirection.Input;
+                lobjparameter[3].Value = operatorID;
+
+                lobjDataTier.FillDataset("TRA_GET_BALANCE", ref lobjDataset, lobjparameter, ref lstrErrCode, ref lstrErrMsg);
+                if (!string.IsNullOrEmpty(lstrErrMsg))
+                {
+                    lobjErrorLog.APPLOG_WRITER(HermesLogger.clsConnector.APPLOG_ProjectType.APP_OTHERES, "CheckQuota", "CheckQuota", clsConnector.APPLOG_MessageType.RESPONSE, lstrErrMsg, "");
+                }
+                if (lobjDataset.Tables[0].Rows.Count > 0)
+                {
+                    if (lobjDataset.Tables[0].Rows[0][0].ToString() == "1")
+                    {
+                        if (Convert.ToDouble(lobjDataset.Tables[1].Rows[0][2]) > amount)
+                        {
+                            lintBalance = Convert.ToDouble(lobjDataset.Tables[1].Rows[0][2]);
+                            return true;
+                        }
+                        else
+                        {
+                            errotMSG = "YOUR AGENT CREDIT LIMIT IS [" + lobjDataset.Tables[1].Rows[0][2].ToString() + "] LESS THAN THE TOTAL COST";
+                            lintBalance = Convert.ToDouble(lobjDataset.Tables[1].Rows[0][2]);
+                            return false;
+                        }
+                    }
+                    else
+                    {
+                        errotMSG = lobjDataset.Tables[1].Rows[0][0].ToString();
+
+                        return false;
+                    }
+                }
+                else
+                {
+                    errotMSG = lstrErrMsg;
+                    return false;
+                }
+            }
+            catch (Exception ex)
+            {
+                errotMSG = ex.Message + errotMSG;
+                //  lobjErrorLog.ERROR_HANDLER(clsConnector.ERR_ApplicationType.ERR_OTHERS, HermesLogger.clsConnector.APPLOG_ProjectType.APP_OTHERES, "COMMON", "COMMON", "InsuranceCheckQuota", ex);
+                lobjArmErrorLog.Err_Handler(ex, "Common", "CheckQuota");
+                //   lobjerror.Err_Handler("Biyaheko : CommonFunctions", "CheckQuota", ex.Message);
+                return false;
+            }
+        }
+
+        public bool InsertTrack(string travleAgentID, string terminalId, string userTrackID, string operatorID, string billerName, double amount, string firstFieldVal, string secondFiedVal, ref string HermesPNR, ref string lstrErrMsg)
+        {
+            try
+            {
+                clsGames lobjGaming = new clsGames();
+                DataSet lobjds = new DataSet();
+                string errorCode;
+                string errorDesc;
+                errorCode = "";
+                errorDesc = "";
+
+                SqlParameter[] @params = new SqlParameter[9];
+
+                @params[0] = new SqlParameter();
+                @params[0].DbType = DbType.String;
+                @params[0].ParameterName = "@USERTRACKID";
+                @params[0].Direction = ParameterDirection.Input;
+                @params[0].Value = userTrackID;
+
+                @params[1] = new SqlParameter();
+                @params[1].DbType = DbType.String;
+                @params[1].ParameterName = "@TRAVELAGENTID";
+                @params[1].Direction = ParameterDirection.Input;
+                @params[1].Value = travleAgentID;
+
+                @params[2] = new SqlParameter();
+                @params[2].DbType = DbType.String;
+                @params[2].ParameterName = "@TERMINALID";
+                @params[2].Direction = ParameterDirection.Input;
+                @params[2].Value = terminalId;
+
+                @params[3] = new SqlParameter();
+                @params[3].DbType = DbType.Int32;
+                @params[3].ParameterName = "@OPERATORID";
+                @params[3].Direction = ParameterDirection.Input;
+                @params[3].Value = int.Parse(operatorID);
+
+                @params[4] = new SqlParameter();
+                @params[4].DbType = DbType.String;
+                @params[4].ParameterName = "@BillerName";
+                @params[4].Direction = ParameterDirection.Input;
+                @params[4].Value = billerName;
+
+                @params[5] = new SqlParameter();
+                @params[5].DbType = DbType.Double;
+                @params[5].ParameterName = "@Amount";
+                @params[5].Direction = ParameterDirection.Input;
+                @params[5].Value = amount;
+
+                @params[6] = new SqlParameter();
+                @params[6].DbType = DbType.String;
+                @params[6].ParameterName = "@OTHERS1";
+                @params[6].Direction = ParameterDirection.Input;
+                @params[6].Value = firstFieldVal;
+
+                @params[7] = new SqlParameter();
+                @params[7].DbType = DbType.String;
+                @params[7].ParameterName = "@OTHERS2";
+                @params[7].Direction = ParameterDirection.Input;
+                @params[7].Value = secondFiedVal;
+
+                @params[8] = new SqlParameter();
+                @params[8].DbType = DbType.String;
+                @params[8].ParameterName = "@IPADDRESS";
+                @params[8].Direction = ParameterDirection.Input;
+                @params[8].Value = "";
+
+                lobjGaming.executeDataSet("TMP_INS_BILLPAYMENTTRACK", ref lobjds, @params, ref errorCode, ref errorDesc);
+                if (lobjds.Tables.Count > 0)
+                {
+                    if (lobjds.Tables[0].Rows.Count > 0)
+                    {
+                        if ((lobjds.Tables[0].Rows[0][0].ToString() == "1"))
+                        {
+                            HermesPNR = lobjds.Tables[1].Rows[0][0].ToString();
+                            return true;
+                        }
+                        else
+                        {
+                            lstrErrMsg = lobjds.Tables[0].Rows[0][1].ToString();
+                            return false;
+                        }
+                    }
+                    else
+                    {
+                        lstrErrMsg = "Transaction Failed. Please try later";
+                        return false;
+                    }
+                }
+                else
+                {
+                    lstrErrMsg = errorDesc;
+                    return false;
+                }
+            }
+            catch (Exception ex)
+            {
+                //    lobjerror.Err_Handler(ex, "BiyahekoTSS : CommonFunctions", "InsertTrack");
+                lobjArmErrorLog.Err_Handler(ex, "Common", "InsertTrack");
+                lstrErrMsg = ex.Message;
+                return false;
+            }
+        }
+
+        public bool InsertTrackInsurance(string travleAgentID, string terminalId, string userTrackID, string operatorID, string billerName, double amount, string firstFieldVal, string secondFiedVal, ref string HermesPNR, ref string lstrErrMsg)
+        {
+            try
+            {
+                clsGames lobjGaming = new clsGames();
+                DataSet lobjds = new DataSet();
+                string errorCode;
+                string errorDesc;
+                errorCode = "";
+                errorDesc = "";
+
+                SqlParameter[] @params = new SqlParameter[8];
+
+                @params[0] = new SqlParameter();
+                @params[0].DbType = DbType.String;
+                @params[0].ParameterName = "@USERTRACKID";
+                @params[0].Direction = ParameterDirection.Input;
+                @params[0].Value = userTrackID;
+
+                @params[1] = new SqlParameter();
+                @params[1].DbType = DbType.String;
+                @params[1].ParameterName = "@TRAVELAGENTID";
+                @params[1].Direction = ParameterDirection.Input;
+                @params[1].Value = travleAgentID;
+
+                @params[2] = new SqlParameter();
+                @params[2].DbType = DbType.String;
+                @params[2].ParameterName = "@TERMINALID";
+                @params[2].Direction = ParameterDirection.Input;
+                @params[2].Value = terminalId;
+
+                @params[3] = new SqlParameter();
+                @params[3].DbType = DbType.Int32;
+                @params[3].ParameterName = "@OPERATORID";
+                @params[3].Direction = ParameterDirection.Input;
+                @params[3].Value = int.Parse(operatorID);
+
+                @params[4] = new SqlParameter();
+                @params[4].DbType = DbType.String;
+                @params[4].ParameterName = "@PassangerDetails";
+                @params[4].Direction = ParameterDirection.Input;
+                @params[4].Value = billerName;
+
+                @params[5] = new SqlParameter();
+                @params[5].DbType = DbType.Double;
+                @params[5].ParameterName = "@Amount";
+                @params[5].Direction = ParameterDirection.Input;
+                @params[5].Value = amount;
+
+                @params[6] = new SqlParameter();
+                @params[6].DbType = DbType.String;
+                @params[6].ParameterName = "@ProductCode";
+                @params[6].Direction = ParameterDirection.Input;
+                @params[6].Value = firstFieldVal;
+
+                @params[7] = new SqlParameter();
+                @params[7].DbType = DbType.String;
+                @params[7].ParameterName = "@AirlinesPnr";
+                @params[7].Direction = ParameterDirection.Input;
+                @params[7].Value = secondFiedVal;
+                lobjGaming.executeDataSet("Tmp_InsInsuranceTrack", ref lobjds, @params, ref errorCode, ref errorDesc);
+                if (lobjds.Tables.Count > 0)
+                {
+                    if (lobjds.Tables[0].Rows.Count > 0)
+                    {
+                        if ((lobjds.Tables[0].Rows[0][0].ToString() == "1"))
+                        {
+                            HermesPNR = lobjds.Tables[1].Rows[0][0].ToString();
+                            return true;
+                        }
+                        else
+                        {
+                            lstrErrMsg = lobjds.Tables[0].Rows[0][1].ToString();
+                            return false;
+                        }
+                    }
+                    else
+                    {
+                        lstrErrMsg = "Transaction Failed. Please try later";
+                        return false;
+                    }
+                }
+                else
+                {
+                    lstrErrMsg = errorDesc;
+                    return false;
+                }
+            }
+            catch (Exception ex)
+            {
+                //   lobjerror.Err_Handler(ex, "BiyahekoTSS : CommonFunctions", "InsertTrackInsurance");
+                lobjArmErrorLog.Err_Handler(ex, "Common", "InsertTrackInsurance");
+                lstrErrMsg = ex.Message;
+                return false;
+            }
+        }
+
+        public void updateTrack(string userTrackID, string responseMessage)
+        {
+            try
+            {
+                clsGames lobjUpd = new clsGames();
+                SqlParameter[] updParams = new SqlParameter[2];
+                string lstrUpdErrCode;
+                string lstrUpdErrDesc;
+                DataSet updDs = new DataSet();
+                lstrUpdErrCode = "";
+                lstrUpdErrDesc = "";
+
+                updParams[0] = new SqlParameter();
+                updParams[0].DbType = DbType.String;
+                updParams[0].ParameterName = "@UserTrackId";
+                updParams[0].Direction = ParameterDirection.Input;
+                updParams[0].Value = userTrackID;
+
+                updParams[1] = new SqlParameter();
+                updParams[1].DbType = DbType.String;
+                updParams[1].ParameterName = "@REMARKS";
+                updParams[1].Direction = ParameterDirection.Input;
+                updParams[1].Value = responseMessage;
+
+                lobjUpd.executeDataSet("TMP_UPT_BILLPAYMENTTRACK", ref updDs, updParams, ref lstrUpdErrCode, ref lstrUpdErrDesc);
+                if (updDs.Tables[0].Rows[0][0].ToString() != "1")
+                {
+
+                }
+            }
+            catch (Exception ex)
+            {
+                // lobjerror.Err_Handler(ex, "BiyahekoTSS : CommonFunctions", "updateBillPayTrack");
+                lobjArmErrorLog.Err_Handler(ex, "Common", "updateBillPayTrack");
+
+            }
+        }
+
+        public bool InsertTransaction(string travelAgentID, string terminalID, string userTrackID, string operatorID, string billerName, double amount, string firstFieldVal, string secondFiedVal, string statusCode, string referenceNumber, double serviceCharge, string totalAmount, string fsFieldLblVal, string sndFieldLblVal, string provider, string dob, string email, string plancode, string pstrHermesPnr, string serRef)
+        {
+
+            try
+            {
+                clsGames lobjGaming = new clsGames();
+                string lstrErrCode;
+                string lstrErrDesc;
+                DataSet ldsreturn = new DataSet();
+                lstrErrCode = "";
+                lstrErrDesc = "";
+
+                SqlParameter[] param = new SqlParameter[22];
+
+                param[0] = new SqlParameter();
+                param[0].DbType = DbType.String;
+                param[0].ParameterName = "@UserTrackId";
+                param[0].Direction = ParameterDirection.Input;
+                param[0].Value = userTrackID;
+
+                param[1] = new SqlParameter();
+                param[1].DbType = DbType.String;
+                param[1].ParameterName = "@TravelAgentID";
+                param[1].Direction = ParameterDirection.Input;
+                param[1].Value = travelAgentID;
+
+                param[2] = new SqlParameter();
+                param[2].DbType = DbType.String;
+                param[2].ParameterName = "@TerminalId";
+                param[2].Direction = ParameterDirection.Input;
+                param[2].Value = terminalID;
+
+                param[3] = new SqlParameter();
+                param[3].DbType = DbType.Int32;
+                param[3].ParameterName = "@OperatorId";
+                param[3].Direction = ParameterDirection.Input;
+                param[3].Value = int.Parse(operatorID);
+
+                param[4] = new SqlParameter();
+                param[4].DbType = DbType.String;
+                param[4].ParameterName = "@BillerName";
+                param[4].Direction = ParameterDirection.Input;
+                param[4].Value = billerName;
+
+                param[5] = new SqlParameter();
+                param[5].DbType = DbType.String;
+                param[5].ParameterName = "@Others1";
+                param[5].Direction = ParameterDirection.Input;
+                param[5].Value = firstFieldVal;
+
+                param[6] = new SqlParameter();
+                param[6].DbType = DbType.String;
+                param[6].ParameterName = "@Others2";
+                param[6].Direction = ParameterDirection.Input;
+                param[6].Value = secondFiedVal;
+
+                param[7] = new SqlParameter();
+                param[7].DbType = DbType.String;
+                param[7].ParameterName = "@StatusCode";
+                param[7].Direction = ParameterDirection.Input;
+                param[7].Value = statusCode;
+
+                param[8] = new SqlParameter();
+                param[8].DbType = DbType.String;
+                param[8].ParameterName = "@ReferenceNumber";
+                param[8].Direction = ParameterDirection.Input;
+                param[8].Value = referenceNumber;
+
+                param[9] = new SqlParameter();
+                param[9].DbType = DbType.Double;
+                param[9].ParameterName = "@Amount";
+                param[9].Direction = ParameterDirection.Input;
+                param[9].Value = amount;
+
+                param[10] = new SqlParameter();
+                param[10].DbType = DbType.Double;
+                param[10].ParameterName = "@ServiceCharge";
+                param[10].Direction = ParameterDirection.Input;
+                param[10].Value = serviceCharge;
+
+                param[11] = new SqlParameter();
+                param[11].DbType = DbType.Double;
+                param[11].ParameterName = "@TotalAmount";
+                param[11].Direction = ParameterDirection.Input;
+                param[11].Value = totalAmount;
+
+                param[12] = new SqlParameter();
+                param[12].DbType = DbType.Int32;
+                param[12].ParameterName = "@Status";
+                param[12].Direction = ParameterDirection.Input;
+                param[12].Value = 1;
+
+                param[13] = new SqlParameter();
+                param[13].DbType = DbType.String;
+                param[13].ParameterName = "@OthersDesc1";
+                param[13].Direction = ParameterDirection.Input;
+                param[13].Value = fsFieldLblVal;
+
+                param[14] = new SqlParameter();
+                param[14].DbType = DbType.String;
+                param[14].ParameterName = "@OthersDesc2";
+                param[14].Direction = ParameterDirection.Input;
+                param[14].Value = sndFieldLblVal;
+
+                param[15] = new SqlParameter();
+                param[15].DbType = DbType.String;
+                param[15].ParameterName = "@Provider";
+                param[15].Direction = ParameterDirection.Input;
+                param[15].Value = provider;
+
+                param[16] = new SqlParameter();
+                param[16].DbType = DbType.DateTime;
+                param[16].ParameterName = "@DOB";
+                param[16].Direction = ParameterDirection.Input;
+                param[16].Value = null;
+
+                param[17] = new SqlParameter();
+                param[17].DbType = DbType.String;
+                param[17].ParameterName = "@Email";
+                param[17].Direction = ParameterDirection.Input;
+                param[17].Value = email;
+
+                param[18] = new SqlParameter();
+                param[18].DbType = DbType.String;
+                param[18].ParameterName = "@PlanCode";
+                param[18].Direction = ParameterDirection.Input;
+                param[18].Value = plancode;
+
+                param[19] = new SqlParameter();
+                param[19].DbType = DbType.String;
+                param[19].ParameterName = "@HermesPnr";
+                param[19].Direction = ParameterDirection.Input;
+                param[19].Value = pstrHermesPnr;
+
+                param[20] = new SqlParameter();
+                param[20].DbType = DbType.String;
+                param[20].ParameterName = "@IPADDRESS";
+                param[20].Direction = ParameterDirection.Input;
+                param[20].Value = "";
+
+                param[21] = new SqlParameter();
+                param[21].DbType = DbType.String;
+                param[21].ParameterName = "@ServiceReferenceNumber";
+                param[21].Direction = ParameterDirection.Input;
+                param[21].Value = serRef;
+
+                lobjGaming.executeDataSet("TRA_BILLPAYMENT_TRANSACTION", ref ldsreturn, param, ref lstrErrCode, ref lstrErrDesc);
+
+                if (string.IsNullOrEmpty(lstrErrDesc))
+                {
+                    if (ldsreturn.Tables[0].Rows[0][0] != "1")
+                    {
+                        return true;
+                    }
+                    else
+                    {
+                        return false;
+                    }
+                }
+                else
+                {
+                    return false;
+                }
+
+
+            }
+            catch (Exception ex)
+            {
+                //   lobjerror.Err_Handler(ex, "BiyahekoTSS : Common", "InsertTransaction");
+                lobjArmErrorLog.Err_Handler(ex, "Common", "InsertTransaction");
+                return false;
+            }
+
+        }
+
+        public bool GetBillPayHistory(string lstrAgentID, string lstrTermID, string lstrFDate, string lstrTDate, ref DataSet ldsReslt, ref string lstrErrMsg)
+        {
+            try
+            {
+                clsGames lobjClsGaming = new clsGames();
+                SqlParameter[] param = new SqlParameter[7];
+                DataSet ldsReturn = new DataSet();
+                string pstrerrcode = "";
+                string pstrerrordesc = "";
+
+                param[0] = new SqlParameter();
+                param[0].ParameterName = "@AGENTID";
+                param[0].DbType = DbType.String;
+                param[0].Direction = ParameterDirection.Input;
+                param[0].Value = lstrAgentID;
+
+                param[1] = new SqlParameter();
+                param[1].ParameterName = "@TERMINALID";
+                param[1].DbType = DbType.String;
+                param[1].Direction = ParameterDirection.Input;
+                param[1].Value = lstrTermID;
+
+                param[2] = new SqlParameter();
+                param[2].ParameterName = "@FROMDATE";
+                param[2].DbType = DbType.DateTime;
+                param[2].Direction = ParameterDirection.Input;
+                param[2].Value = DateTime.ParseExact(lstrFDate, "dd/MM/yyyy", CultureInfo.InvariantCulture);
+
+                param[3] = new SqlParameter();
+                param[3].ParameterName = "@TODATE";
+                param[3].DbType = DbType.DateTime;
+                param[3].Direction = ParameterDirection.Input;
+                param[3].Value = DateTime.ParseExact(lstrTDate, "dd/MM/yyyy", CultureInfo.InvariantCulture);
+
+                param[4] = new SqlParameter();
+                param[4].ParameterName = "@PROVIDER";
+                param[4].DbType = DbType.String;
+                param[4].Direction = ParameterDirection.Input;
+                param[4].Value = "Bills Payment";
+
+                lobjClsGaming.executeDataSet("TMP_GET_BILLPAYMENTBOOKEDDETAILS", ref ldsReturn, param, ref pstrerrcode, ref pstrerrordesc);
+
+                if (ldsReturn.Tables.Count > 0)
+                {
+                    if (ldsReturn.Tables[0].Rows.Count > 0)
+                    {
+                        ldsReslt = ldsReturn;
+                        HttpContext.Current.Session["ecPayResults"] = ldsReturn.Tables[0];
+                        return true;
+                    }
+                    else
+                    {
+                        lstrErrMsg = "No Data Found";
+                        return false;
+                    }
+                }
+                else
+                {
+                    lstrErrMsg = pstrerrordesc;
+                    return false;
+                }
+            }
+            catch (Exception ex)
+            {
+                //   lobjerror.Err_Handler(ex, "BiyahekoTSS : Common", "GetBillPayHistory");
+                // lobjErrorLog.ERROR_HANDLER(clsConnector.ERR_ApplicationType.ERR_OTHERS, HermesLogger.clsConnector.APPLOG_ProjectType.APP_OTHERES, "COMMON", "COMMON", "GetBillPayHistory", ex);
+                lobjArmErrorLog.Err_Handler(ex, "Common", "GetBillPayHistory");
+                return false;
+            }
+        }
+
+        public bool InsuHistory(string lstrAgentID, string lstrTermID, string lstrFDate, string lstrTDate, ref DataSet ldsReslt, ref string lstrErrMsg)
+        {
+            try
+            {
+                clsGames lobjClsGaming = new clsGames();
+                SqlParameter[] param = new SqlParameter[4];
+                DataSet ldsReturn = new DataSet();
+                string pstrerrcode = "";
+                string pstrerrordesc = "";
+
+                param[0] = new SqlParameter();
+                param[0].ParameterName = "@TRAVELAGENTID";
+                param[0].DbType = DbType.String;
+                param[0].Direction = ParameterDirection.Input;
+                param[0].Value = lstrAgentID;
+
+                param[1] = new SqlParameter();
+                param[1].ParameterName = "@TERMINALID";
+                param[1].DbType = DbType.String;
+                param[1].Direction = ParameterDirection.Input;
+                param[1].Value = lstrTermID;
+
+                param[2] = new SqlParameter();
+                param[2].ParameterName = "@FROMDATE";
+                param[2].DbType = DbType.String;
+                param[2].Direction = ParameterDirection.Input;
+                param[2].Value = lstrFDate;
+
+                param[3] = new SqlParameter();
+                param[3].ParameterName = "@TODATE";
+                param[3].DbType = DbType.String;
+                param[3].Direction = ParameterDirection.Input;
+                param[3].Value = lstrTDate;
+
+
+                lobjClsGaming.executeDataSet("TRA_GET_INSURANCEVIEWBOOKEDDETAILS", ref ldsReturn, param, ref pstrerrcode, ref pstrerrordesc);
+
+                if (ldsReturn.Tables.Count > 0)
+                {
+                    if (ldsReturn.Tables[0].Rows.Count > 0)
+                    {
+                        ldsReslt = ldsReturn;
+                        return true;
+                    }
+                    else
+                    {
+                        lstrErrMsg = "No Data Found";
+                        return false;
+                    }
+                }
+                else
+                {
+                    lstrErrMsg = pstrerrordesc;
+                    return false;
+                }
+            }
+            catch (Exception ex)
+            {
+                // lobjErrorLog.ERROR_HANDLER(clsConnector.ERR_ApplicationType.ERR_OTHERS, HermesLogger.clsConnector.APPLOG_ProjectType.APP_OTHERES, "COMMON", "COMMON", "InsuHistory", ex);
+                // lobjerror.Err_Handler(ex, "BiyahekoTSS : Common", "InsuHistory");
+                lobjArmErrorLog.Err_Handler(ex, "Common", "InsuHistory");
+                return false;
+            }
+        }
+
+        public bool GetBillPayReceipt(string lstrAgentID, string lstrTermID, string lstrHermesPNR, ref DataSet ldsReslt, ref string lstrErrMsg)
+        {
+            try
+            {
+                clsGames lobjClsGaming = new clsGames();
+                SqlParameter[] param = new SqlParameter[4];
+                DataSet ldsReturn = new DataSet();
+                string pstrerrcode = "";
+                string pstrerrordesc = "";
+
+                param[0] = new SqlParameter();
+                param[0].ParameterName = "@Transactionid";
+                param[0].DbType = DbType.String;
+                param[0].Direction = ParameterDirection.Input;
+                param[0].Value = lstrHermesPNR;
+
+                param[1] = new SqlParameter();
+                param[1].ParameterName = "@TravelagentId";
+                param[1].DbType = DbType.String;
+                param[1].Direction = ParameterDirection.Input;
+                param[1].Value = lstrAgentID;
+
+                param[2] = new SqlParameter();
+                param[2].ParameterName = "@Terminalid";
+                param[2].DbType = DbType.DateTime;
+                param[2].Direction = ParameterDirection.Input;
+                param[2].Value = lstrTermID;
+
+                lobjClsGaming.executeDataSet("Tmp_Get_BillpaymentReprint", ref ldsReturn, param, ref pstrerrcode, ref pstrerrordesc);
+
+                if (ldsReturn.Tables.Count > 0)
+                {
+                    if (ldsReturn.Tables[0].Rows.Count > 0)
+                    {
+                        ldsReslt = ldsReturn;
+                        return true;
+                    }
+                    else
+                    {
+                        return false;
+                    }
+                }
+                else
+                {
+                    lstrErrMsg = pstrerrordesc;
+                    return false;
+                }
+            }
+            catch (Exception ex)
+            {
+                //lobjerror.Err_Handler(ex, "BiyahekoTSS : Common", "GetBillPayReceipt");
+                lobjArmErrorLog.Err_Handler(ex, "Common", "GetBillPayReceipt");
+                return false;
+            }
+        }
+
+        public bool CancellationParsing(ref string lstrInput, ref Cancellationmethod pobjpolicy, ref string lstrErrMsg)
+        {
+            try
+            {
+
+                string[] lstrarray = lstrInput.Split('$')[1].Split('`');
+                List<Cancellation> lobjcan = new List<Cancellation>();
+                Cancellation lobjpolicy = new Cancellation();
+                lobjpolicy.Remarks = lstrarray[3];
+                lobjpolicy.Policy = lstrarray[4];
+                lobjcan.Add(lobjpolicy);
+                pobjpolicy.summary = lobjcan;
+                return true;
+
+
+
+            }
+            catch (Exception ex)
+            {
+                //  lobjerror.Err_Handler(ex, "BiyahekoTSS : Common", "CancellationParsing");
+                lobjArmErrorLog.Err_Handler(ex, "Common", "CancellationParsing");
+                return false;
+            }
+        }
+
+        public bool GetIntAirline(string logininput, ref string pstroutput, ref string pstrRefErrorDesc, ref string pstrRefErrorCode)
+        {
+            try
+            {
+                DataSet lobjDataset = new DataSet();
+                SqlParameter[] lobjParameters = new SqlParameter[5];
+                lobjParameters[0] = new SqlParameter();
+                lobjParameters[0].ParameterName = "@NAME";
+                lobjParameters[0].DbType = DbType.String;
+                lobjParameters[0].Direction = ParameterDirection.Input;
+                lobjParameters[0].Value = logininput;
+
+
+                lobjDataTier.FillDataset("TMP_GET_AIRLINES_CBT", ref lobjDataset, lobjParameters, ref lstrErrorCode, ref lstrErrorMsg);
+                if (string.IsNullOrEmpty(lstrErrorMsg))
+                {
+                    if (lobjDataset.Tables[0].Rows.Count > 0)
+                    {
+                        lobjDataset.Tables[0].TableName = "AirlineList";
+                        pstroutput = JsonConvert.SerializeObject(lobjDataset);
+                        pstroutput = SetStatus("1", "Success", pstroutput);
+                        return true;
+                    }
+                }
+                pstroutput = SetStatus("1", "Success", "{\"AirlineList\":[]}");
+                return false;
+
+            }
+            catch (Exception ex)
+            {
+                //lobjErrorLog.Err_Handler(ex, "Common.cs", "GetIntAirline");
+                pstrRefErrorDesc = lstrErrorMsg == "" ? "Unable to process..!" : lstrErrorMsg;
+                pstroutput = SetStatus("0", "Success", pstrRefErrorDesc);
+                //  lobjerror.Err_Handler(ex, "BiyahekoTSS : Common", "GetIntAirline");
+                lobjArmErrorLog.Err_Handler(ex, "Common", "GetIntAirline");
+                return false;
+            }
+        }
+
+        public string GetIPAddress()
+        {
+            string lstrIPAddress = string.Empty;
+            try
+            {
+                if (HttpContext.Current.Request.ServerVariables["HTTP_X_FORWARDED_FOR"] != null)
+                {
+                    lstrIPAddress += HttpContext.Current.Request.ServerVariables["HTTP_X_FORWARDED_FOR"].ToString() + "#";
+                }
+
+                if (HttpContext.Current.Request.ServerVariables["REMOTE_ADDR"] != null)
+                {
+                    lstrIPAddress += HttpContext.Current.Request.ServerVariables["REMOTE_ADDR"].ToString() + "#";
+                }
+
+                lstrIPAddress += HttpContext.Current.Request.UserHostAddress + "#";
+            }
+            catch (Exception ex)
+            {
+                //    lobjerror.Err_Handler(ex, "BiyahekoTSS : Common", "GetIPAddress");
+                lobjArmErrorLog.Err_Handler(ex, "Common", "GetIPAddress");
+            }
+            return lstrIPAddress;
+        }
+
+        public bool GetOtherMonthLowFare(string Origin, string Destination, DateTime TravelDate, string TerminalId, ref List<LowFare> lstLowFare, ref string lstrError)
+        {
+            try
+            {
+                SqlParameter[] lobjParam = { 
+                                            new SqlParameter("@ORIGIN",Origin),
+                                            new SqlParameter("@DESTINATION",Destination),
+                                            new SqlParameter("@travelDate",TravelDate),
+                                            new SqlParameter("@Terminalid",TerminalId)                                             
+                                           };
+                DataSet lobjDataSet = new DataSet();
+                ARMDataTier.clsDataconnector lobjFareDataTier = new ARMDataTier.clsDataconnector(ARMDataTier.clsDataconnector.DATABASE.BUS);
+                lobjFareDataTier.FillDataset("Tra_Get_FareDetails_Datewise", ref lobjDataSet, lobjParam, ref lstrErrorCode, ref lstrError);
+                if (!string.IsNullOrEmpty(lstrError))
+                {
+                    return false;
+                }
+                else
+                {
+                    if (lobjDataSet.Tables.Count > 0)
+                    {
+                        if (lobjDataSet.Tables[0].Rows.Count > 0)
+                        {
+                            foreach (DataRow dr in lobjDataSet.Tables[0].Rows)
+                            {
+                                LowFare lobjlowfare = new LowFare();
+                                lobjlowfare.Fare = Convert.ToDouble(dr.ItemArray[4]);
+                                string[] strDateArr = dr.ItemArray[2].ToString().Split('/');
+                                lobjlowfare.TravelDate = Convert.ToDateTime(strDateArr[1] + "/" + strDateArr[0] + "/" + strDateArr[2]);
+                                lstLowFare.Add(lobjlowfare);
+                            }
+                            return true;
+                        }
+                        else
+                        {
+                            lstrError = "No rows found.";
+                            return false;
+                        }
+                    }
+                    else
+                    {
+                        lstrError = "No tables found.";
+                        return false;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                //    lobjArmErrorLog.Err_Handler(ex, "Common", "GetOtherMonthLowFare");
+                lobjArmErrorLog.Err_Handler(ex, "Common", "GetOtherMonthLowFare");
+            }
+            return false;
+        }
+
+        public void GetSMSString_Sim(string lstrBookingResponse, ref string pstrOutput, ref string pstrError)
+        {
+            string lstrAirlineName = string.Empty;
+            string lstrAirlinePNR = string.Empty;
+            string lstrAgentName = string.Empty;
+            string lstrMajorPaxName = string.Empty;
+            string lstrTravSeg = string.Empty;
+            string lstrFrstDeptTime = string.Empty;
+            string lobjDepTime = string.Empty;
+            string[] lobjTckResp = lstrBookingResponse.Split('|')[1].Split('#');
+            wsSMS.PHPSendSms lobjSMS = new wsSMS.PHPSendSms();
+            string lstrCustMobNo = string.Empty;
+            string[] lobjTripDtls = new string[] { };
+            int lintPaxCount = 1;
+            int lintTripInd;
+            try
+            {
+                for (lintTripInd = 0; lintTripInd <= lobjTckResp.Length - 2; lintTripInd++)
+                {
+                    lobjTripDtls = lobjTckResp[lintTripInd].Split('~');
+                    if (lintTripInd == 0)
+                    {
+                        lstrAgentName = lobjTripDtls[19].Split('*')[0];
+                        lstrAirlineName = lobjTripDtls[4].Split('*')[2];
+                        lstrAirlinePNR = lobjTripDtls[4].Split('*')[1];
+                    }
+                    string[] lobjTckDtls = lobjTripDtls[20].Split('^');
+                    lintPaxCount = lobjTckDtls.Length - 2;
+                    // For lintPaxCount = 0 To lobjTckDtls.Length - 2
+                    string[] lobjSeg = lobjTckDtls[0].Split('`')[4].Split('@');
+                    int lintSegCount;
+                    for (lintSegCount = 0; lintSegCount <= lobjSeg.Length - 2; lintSegCount++)
+                    {
+                        string[] lobjSegDtls = lobjSeg[lintSegCount].Split('*');
+                        if (lintTripInd == 0 & lintSegCount == 0)
+                        {
+                            lstrFrstDeptTime = lobjSegDtls[5].Split(' ')[0];
+                            lstrMajorPaxName = lobjTckDtls[0].Split('`')[2].Split('*')[1] + " " + lobjTckDtls[0].Split('`')[2].Split('*')[2] + " " + lobjTckDtls[0].Split('`')[2].Split('*')[3];
+                        }
+                        string lstrDept = lobjSegDtls[5].Split('/')[1] + "/" + lobjSegDtls[5].Split('/')[0] + "/" + lobjSegDtls[5].Split('/')[2];
+
+                        DateTime ldtDepDT = DateTime.ParseExact(lstrDept, "MM/dd/yyyy HH:mm", System.Globalization.CultureInfo.InvariantCulture);
+
+                        lstrTravSeg += lobjSegDtls[3] + "- " + lobjSegDtls[6] + " FLIGHT " + lobjSegDtls[1] + " " + ldtDepDT.ToString("dd MMM HH:mm").ToUpper() + "HRS,";
+                    }
+                }
+                if (lstrTravSeg != "")
+                {
+                    pstrOutput = lstrAgentName + " Dep " + lstrFrstDeptTime + " " + lstrAirlineName + " PNR " + lstrAirlinePNR + " " + lstrTravSeg + " " + lstrMajorPaxName;
+                    if (lintPaxCount > 1)
+                    {
+                        pstrOutput += " + " + (lintPaxCount - 1).ToString() + ". WE WISH YOU A SAFE JOURNEY";
+                    }
+                    else
+                    {
+                        pstrOutput += "" + ". WE WISH YOU A SAFE JOURNEY";
+                    }
+                    if (lobjTripDtls.Length > 1)
+                    {
+                        if (lobjTripDtls[3] != "")
+                        {
+                            lstrCustMobNo = lobjTripDtls[3].Split('*')[0];
+                            string lstrSMSErrMsg = string.Empty;
+                            if (lstrCustMobNo != "")
+                            {
+                                //lobjArmErrorLog.Err_Handler("BiyahekoTSS :pgprintticket.aspx", "GetSMSString_Sim", "Send SMS INTIAL  - : " + pstrOutput);
+                                lobjSMS.ICS_SendSMS(lstrCustMobNo, pstrOutput, wsSMS.PROVIDER.BIYAHEKO, 1, ref lstrSMSErrMsg, ref pstrError);
+
+                                if (pstrError != "")
+                                {
+                                    pstrError = "Unable to Send SMS to Customer Mobile Number For Hermes PNR" + lobjTripDtls[1] + " and UserTrackiID " + lobjTripDtls[0] + "Reason :-" + pstrError;
+                                }
+                            }
+                            else
+                            {
+                                pstrError = "Unable to Find Customer Mobile Number For Hermes PNR" + lobjTripDtls[1] + " and UserTrackiID " + lobjTripDtls[0];
+                            }
+                        }
+
+                        else
+                        {
+                            pstrError = "Unable to Find Customer Mobile Number For Hermes PNR" + lobjTripDtls[1] + " and UserTrackiID " + lobjTripDtls[0];
+                        }
+                    }
+                    if (!string.IsNullOrEmpty(pstrError))
+                    {
+                        lobjErrorLog.APPLOG_WRITER(HermesLogger.clsConnector.APPLOG_ProjectType.APP_OTHERES, "BIYAHEKONEW-Neylayout", "SendSMS - FAILURE", clsConnector.APPLOG_MessageType.RESPONSE, pstrError, "");
+                    }
+                }
+            }
+
+            catch (Exception ex)
+            {
+                //lobjArmErrorLog.Err_Handler("BiyahekoTSS :pgprintticket.aspx", "GetSMSString_Sim", ex.Description + "UserTrackId = " + );
+                //     lobjArmErrorLog.Err_Handler(ex, "Common" + lobjTripDtls[0], "GetSMSString_Sim");
+                lobjArmErrorLog.Err_Handler(ex, "Common", "GetSMSString_Sim");
+                pstrError = ex.ToString();
+            }
+        }
+
+        public bool GetLowFare(string Origin, string Destination, DateTime TravelDate, ref List<LowFare> lstLowFare, ref string lstrError)
+        {
+            try
+            {
+                SqlParameter[] lobjParam = { 
+                                            new SqlParameter("@ORIGIN",Origin),
+                                            new SqlParameter("@DESTINATION",Destination),
+                                            new SqlParameter("@travelDate",TravelDate)
+                                           };
+                DataSet lobjDataSet = new DataSet();
+                lobjFareDataTier.FillDataset("Tra_Get_FareDetails", ref lobjDataSet, lobjParam, ref lstrErrorCode, ref lstrError);
+                if (!string.IsNullOrEmpty(lstrError))
+                {
+                    return false;
+                }
+                else
+                {
+                    if (lobjDataSet.Tables.Count > 1)
+                    {
+                        //if (lobjDataSet.Tables[1].Rows.Count > 0)
+                        //{
+                        //    foreach (DataRow dr in lobjDataSet.Tables[1].Rows)
+                        //    {
+                        //        LowFare lobjlowfare = new LowFare();
+                        //        lobjlowfare.Fare = Convert.ToDouble(dr.ItemArray[4]);
+                        //        string[] strDateArr = dr.ItemArray[2].ToString().Split('/');
+                        //        lobjlowfare.TravelDate = Convert.ToDateTime(strDateArr[0] + "/" + strDateArr[1] + "/" + strDateArr[2]);
+                        //        lstLowFare.Add(lobjlowfare);
+                        //    }
+                        //    return true;
+                        //}
+                        if (lobjDataSet.Tables[0].Rows.Count > 0)
+                        {
+                            string[] strArr = lobjDataSet.Tables[0].Rows[0][0].ToString().Split('@');
+                            for (int i = 0; i < strArr.Length; i++)
+                            {
+                                if (!string.IsNullOrEmpty(strArr[i]))
+                                {
+                                    string[] strVlaueArr = strArr[i].Split('$');
+                                    LowFare lobjlowfare = new LowFare();
+                                    lobjlowfare.Fare = Convert.ToDouble(strVlaueArr[4]);
+                                    string[] strDateArr = strVlaueArr[2].ToString().Split('/');
+                                    lobjlowfare.TravelDate = Convert.ToDateTime(strDateArr[1] + "/" + strDateArr[0] + "/" + strDateArr[2]);
+                                    lstLowFare.Add(lobjlowfare);
+                                }
+                            }
+                            return true;
+                        }
+                        else
+                        {
+                            lstrError = "No rows found.";
+                            return false;
+                        }
+                    }
+                    else
+                    {
+                        lstrError = "No tables found.";
+                        return false;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                // lobjArmErrorLog.Err_Handler(ex, "Common", "GetLowFare");
+                lobjArmErrorLog.Err_Handler(ex, "Common", "GetLowFare");
+            }
+            return false;
+        }
+
+        public bool GetFareCalenderData(LoginInfo terminal, FareRequest Request, ref string lstrOutPut, ref string lstrErrorCode, ref string lstrErrorMsg)
+        {
+            try
+            {
+
+
+                lstrErrorCode = string.Empty;
+                lstrErrorMsg = string.Empty;
+
+                SqlParameter[] lobjParam = { 
+                                            new SqlParameter("@ORIGIN",Request.Orgin),
+                                            new SqlParameter("@DESTINATION", Request.Dest),
+                                            new SqlParameter("@travelDate",Request.DepDate.ToString("MM/dd/yyyy").Replace("-", "/"))
+                                                                                  
+                                           };
+                DataSet lobjDataSet = new DataSet();
+                ARMDataTier.clsDataconnector lobjFareDataTier = new ARMDataTier.clsDataconnector(ARMDataTier.clsDataconnector.DATABASE.BUS);
+                lobjFareDataTier.FillDataset("Tra_Get_FareDetails", ref lobjDataSet, lobjParam, ref lstrErrorCode, ref lstrErrorMsg);
+                if (lstrErrorCode != string.Empty)
+                {
+                    lstrOutPut = "";
+                    return false;
+                }
+                else
+                {
+                    if (lobjDataSet.Tables.Count > 0)
+                    {
+                        if (lobjDataSet.Tables[0].Rows.Count > 0)
+                        {
+                            lstrOutPut = JsonConvert.SerializeObject(lobjDataSet.Tables[1]);
+                            return true;
+                        }
+                        else
+                        {
+                            lstrErrorMsg = "NO RECORDS FOUND";
+                            return false;
+                        }
+                    }
+                    else
+                    {
+                        lstrErrorMsg = "NO RECORDS FOUND";
+                        return false;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                //   lobjArmErrorLog.Err_Handler(ex, "FareCalenderMaster", "GetFareCalenderData");
+                lobjArmErrorLog.Err_Handler(ex, "Common", "GetFareCalenderData");
+
+                lstrErrorMsg = ex.ToString();
+            }
+            return false;
+        }
+
+
+        public bool AddTraveler(string pstrInput, string pstrTravelAgentId, string pstrTerminalID, string pstrMobileNumber, string pstrMailID)
+        {
+            try
+            {
+
+                string lstrErrCode = string.Empty;
+                string lstrErrMsg = string.Empty;
+                DataSet lobjDataset = new DataSet();
+                SqlParameter[] lobjparameter = new SqlParameter[5];
+                ARMDataTier.clsDataconnector lobjDataTier = new ARMDataTier.clsDataconnector(ARMDataTier.clsDataconnector.DATABASE.HERMES);
+
+                lobjparameter[0] = new SqlParameter();
+                lobjparameter[0].ParameterName = "@TravelAgentID";
+                lobjparameter[0].DbType = DbType.String;
+                lobjparameter[0].Direction = ParameterDirection.Input;
+                lobjparameter[0].Value = pstrTravelAgentId;
+
+                lobjparameter[1] = new SqlParameter();
+                lobjparameter[1].ParameterName = "@TerminalId";
+                lobjparameter[1].DbType = DbType.String;
+                lobjparameter[1].Direction = ParameterDirection.Input;
+                lobjparameter[1].Value = pstrTerminalID;
+
+                lobjparameter[2] = new SqlParameter();
+                lobjparameter[2].ParameterName = "@ContactNo";
+                lobjparameter[2].DbType = DbType.String;
+                lobjparameter[2].Direction = ParameterDirection.Input;
+                lobjparameter[2].Value = pstrMobileNumber;
+
+                lobjparameter[3] = new SqlParameter();
+                lobjparameter[3].ParameterName = "@Email";
+                lobjparameter[3].DbType = DbType.String;
+                lobjparameter[3].Direction = ParameterDirection.Input;
+                lobjparameter[3].Value = pstrMailID;
+
+                lobjparameter[4] = new SqlParameter();
+                lobjparameter[4].ParameterName = "@paxDetails";
+                lobjparameter[4].DbType = DbType.String;
+                lobjparameter[4].Direction = ParameterDirection.Input;
+                lobjparameter[4].Value = pstrInput;
+
+                lobjDataTier.FillDataset("tra_ins_paxContact", ref lobjDataset, lobjparameter, ref lstrErrCode, ref lstrErrMsg);
+
+
+                return true;
+
+
+            }
+            catch (Exception ex)
+            {
+                lobjArmErrorLog.Err_Handler(ex, "Common", "AddTraveler");
+                return false;
+
+            }
+        }
+
+
+        public string MD5Hash(string text)
+        {
+
+            try
+            {
+                MD5 md5 = new MD5CryptoServiceProvider();
+                //compute hash from the bytes of text  
+                md5.ComputeHash(ASCIIEncoding.ASCII.GetBytes(text));
+
+                //get hash result after compute it  
+                byte[] result = md5.Hash;
+
+                StringBuilder strBuilder = new StringBuilder();
+                for (int i = 0; i < result.Length; i++)
+                {
+                    //change it into 2 hexadecimal digits  
+                    //for each byte  
+                    strBuilder.Append(result[i].ToString("x2"));
+                }
+
+                return strBuilder.ToString();
+            }
+            catch (Exception ex)
+            {
+                lobjArmErrorLog.Err_Handler(ex, "Common", "MD5Hash");
+                return "";
+
+            }
+        }
+
+
+        public string Encrypt(string msg, string secret)
+        {
+
+            byte[] Results;
+            System.Text.UTF8Encoding UTF8 = new System.Text.UTF8Encoding();
+            MD5CryptoServiceProvider HashProvider = new MD5CryptoServiceProvider();
+            byte[] TDESKey = HashProvider.ComputeHash(UTF8.GetBytes(secret));
+            TripleDESCryptoServiceProvider TDESAlgorithm = new TripleDESCryptoServiceProvider();
+            TDESAlgorithm.Key = TDESKey;
+            TDESAlgorithm.Mode = CipherMode.ECB;
+            TDESAlgorithm.Padding = PaddingMode.PKCS7;
+            byte[] DataToEncrypt = UTF8.GetBytes(msg);
+            try
+            {
+                ICryptoTransform Encryptor = TDESAlgorithm.CreateEncryptor();
+                Results = Encryptor.TransformFinalBlock(DataToEncrypt, 0, DataToEncrypt.Length);
+            }
+            catch
+            {
+                return "";
+            }
+            finally
+            {
+                TDESAlgorithm.Clear();
+                HashProvider.Clear();
+            }
+            return Convert.ToBase64String(Results);
+        }
+
+
+        public bool Hermeslogwriter(string pstrMethodName, string MessageType, string pstrUserTrackId, string pstrTerminalId, dynamic logClass)
+        {
+            string pstrInput;
+            string lstrDate = "";
+
+            try
+            {
+                XmlSerializer xml_serializer = new XmlSerializer(logClass.GetType());
+                StringWriter string_writer = new StringWriter();
+                xml_serializer.Serialize(string_writer, logClass);
+                pstrInput = string_writer.ToString();
+                string_writer.Close();
+                if (MessageType.Trim() == "Request")
+                {
+                    lobjErrorLog.SUPPLIERLOG_WRITER(HermesLogger.clsConnector.SUPPLIERLOG_ProjectType.SUPPLIER_OTHERES, "ECpay-Newlayout", pstrMethodName, pstrUserTrackId, HermesLogger.clsConnector.APPLOG_MessageType.REQUEST, pstrInput, "", false, pstrTerminalId);
+                    return true;
+                }
+                else
+                {
+                    lobjErrorLog.SUPPLIERLOG_WRITER(HermesLogger.clsConnector.SUPPLIERLOG_ProjectType.SUPPLIER_OTHERES, "ECpay-Newlayout", pstrMethodName, pstrUserTrackId, HermesLogger.clsConnector.APPLOG_MessageType.RESPONSE, pstrInput, "", false, pstrTerminalId);
+                    return true;
+                }
+
+            }
+            catch (Exception ex)
+            {
+                // mobjErrorLogNew.ERROR_HANDLER(HermesLogger.clsConnector.ERR_ApplicationType.ERR_API, HermesLogger.clsConnector.APPLOG_ProjectType.WEB_API, "SVCDomesticAir", "DomesticAir", "Hermeslogwriter", ex, false, "");
+                return false;
+            }
+
+        }
+
+
+
+        #endregion
+
+    }
+}
+
+
+
+
+
