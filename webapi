@@ -1,0 +1,195 @@
+using System;
+using EnDeCrypt;
+using Newtonsoft.Json;
+using Biyaheko.Models;
+using System.Net;
+using System.IO;
+using ARMBtErrorLogger;
+using System.Net.Sockets;
+using System.Configuration;
+ 
+using System.Web.Mail;
+ 
+namespace Biyaheko.Logic
+{
+    public class Common
+    {
+        ARMErrorLogger lobjErrorLog = new ARMErrorLogger();
+        clsEnDeCryption lobjEnDec = new clsEnDeCryption();
+
+        internal string Decrypt(string Value)
+        {
+            try
+            {
+                string lstrOutPut = string.Empty;
+                string lstrError = string.Empty;
+                lobjEnDec.Decrypt(Value, ref lstrOutPut, ref lstrError);
+                return lstrOutPut;
+            }
+            catch (Exception)
+            {
+
+                throw;
+            }
+        }
+
+        internal string Encrypt(string Value)
+        {
+            try
+            {
+                string lstrOutPut = string.Empty;
+                string lstrError = string.Empty;
+                lobjEnDec.Encrypt(Value, ref lstrOutPut, ref lstrError);
+                return lstrOutPut;
+            }
+            catch (Exception)
+            {
+
+                throw;
+            }
+        }
+
+        internal clsJsonObject<T> StringToJson<T>(int status, string StatusDesc, T lobject)
+        {
+            clsJsonObject<T> lobj = new clsJsonObject<T>();
+            lobj.Status = status;
+            lobj.StatusDesc = StatusDesc;
+            lobj.Data = lobject;
+            return lobj;
+        }
+
+        public bool ConnectAirlineAPI<T>(string lstrURL,string lstrInput,ref T lobject)
+        {
+            string LstrErr = string.Empty;
+            try
+            {
+                var httpWebRequest = (HttpWebRequest)WebRequest.Create(lstrURL);
+                httpWebRequest.ContentType = "application/json";
+                httpWebRequest.Method = "POST";
+                string json = string.Empty;
+                using (var streamWriter = new StreamWriter(httpWebRequest.GetRequestStream()))
+                {
+                    streamWriter.Write(lstrInput);
+                    streamWriter.Flush();
+                    streamWriter.Close();
+                }
+
+                var httpResponse = (HttpWebResponse)httpWebRequest.GetResponse();
+                using (var streamReader = new StreamReader(httpResponse.GetResponseStream()))
+                {
+                    var result = streamReader.ReadToEnd();
+                    T lobjResp = JsonConvert.DeserializeObject<T>(result);
+                    lobject = lobjResp;
+                    return true;
+                }
+            }
+            catch (Exception ex)
+            {
+                if (ex.InnerException != null)
+                {
+                    LstrErr = ex.InnerException.Message.ToString();
+                    return false;
+                }
+                else
+                {
+                    LstrErr = ex.Message.ToString();
+                    return false;
+                }
+                lobjErrorLog.Err_Handler(ex, "DBConnect", "ConnectAirlineAPI");
+            }
+        }
+
+
+        public bool TCPSocket(string IpAddress, string PortNo, string lstrInputMsg, ref string PstrOutPut, ref string PstrErrorMsg)
+        {
+            TcpClient tcpclient = default(TcpClient);
+            NetworkStream stream = default(NetworkStream);
+            byte[] data = null;
+            try
+            {
+                tcpclient = new TcpClient(IpAddress, Convert.ToInt32(PortNo));
+                data = System.Text.Encoding.ASCII.GetBytes(lstrInputMsg);
+                stream = tcpclient.GetStream();
+                stream.WriteTimeout = (Convert.ToInt32(ConfigurationManager.AppSettings["TCPTimeOut"].ToString()) * 1000);
+                stream.Write(data, 0, data.Length);
+                System.IO.StreamReader ss = new System.IO.StreamReader(stream);
+                PstrOutPut = ss.ReadToEnd();
+                ss.Close();
+                stream.Close();
+                tcpclient.Close();
+                if (string.IsNullOrEmpty(PstrOutPut))
+                {
+                    PstrErrorMsg = "There was problem connection to the server...";
+                    return false;
+                }
+                else
+                {
+                    return true;
+                }
+            }
+            catch (Exception ex)
+            {
+                lobjErrorLog.Err_Handler(ex, "Common", "TCPSocket");
+                PstrErrorMsg = "Exception on TCP Connection : " + ex.Message;
+                return false;
+            }
+            finally
+            {
+                stream = null;
+                tcpclient = null;
+            }
+
+        }
+
+
+        public string GetUserTrackID()
+        {
+            Random random = new Random();
+            return Convert.ToString(DateTime.Now.Day) + Convert.ToString(DateTime.Now.Month) + Convert.ToString(DateTime.Now.Year) + Convert.ToString(DateTime.Now.Hour) + Convert.ToString(DateTime.Now.Minute) + Convert.ToString(DateTime.Now.Second) + Convert.ToString(DateTime.Now.Millisecond) + random.Next();
+        }
+
+        public bool Emailsender(string Mailid, string Subject,string Message,  ref string pstrContentHTML, ref string PstrErrorMsg)
+        {
+            
+            MailMessage mMailMessage = new MailMessage();
+            System.Net.Mail.MailMessage lobjnew = new System.Net.Mail.MailMessage();
+            try
+            { 
+              mMailMessage.From =   ConfigurationManager.AppSettings["sendusername"].ToString();
+            mMailMessage.To = Mailid;
+        //    mMailMessage.Cc = pstrCCMailids;
+          //  mMailMessage.Bcc = pstrBCCMailids;
+                if(Message =="")
+                {
+                    mMailMessage.Body = pstrContentHTML.ToString();
+                }
+                else
+                {
+                    mMailMessage.Body = Message.ToString();
+                }
+            mMailMessage.Subject = Subject;
+            mMailMessage.BodyFormat = MailFormat.Html;
+      //      mMailMessage.Body = pstrContentHTML.ToString();
+            mMailMessage.Priority = System.Web.Mail.MailPriority.Normal;
+
+            mMailMessage.Fields.Add("http://schemas.microsoft.com/cdo/configuration/smtpauthenticate", "1");
+            mMailMessage.Fields.Add("http://schemas.microsoft.com/cdo/configuration/sendusername", ConfigurationManager.AppSettings["sendusername"].ToString());
+            mMailMessage.Fields.Add("http://schemas.microsoft.com/cdo/configuration/sendpassword", ConfigurationManager.AppSettings["sendpassword"].ToString());
+            mMailMessage.Fields.Add("http://schemas.microsoft.com/cdo/configuration/smtpserver", ConfigurationManager.AppSettings["smtpaddress"].ToString());
+            mMailMessage.Fields.Add("http://schemas.microsoft.com/cdo/configuration/smtpserverport", 25);
+
+            SmtpMail.SmtpServer = ConfigurationManager.AppSettings["smtpaddress"].ToString();
+            SmtpMail.SmtpServer.Insert(0, ConfigurationManager.AppSettings["smtpaddress"].ToString());
+            SmtpMail.Send(mMailMessage);
+            }
+            catch (Exception ex)
+            {
+
+            }
+            return true;
+        }
+
+    }
+
+   
+}
